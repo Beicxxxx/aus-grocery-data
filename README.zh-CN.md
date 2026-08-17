@@ -18,7 +18,9 @@ Open Food Facts 补齐缺失字段。输出字段对应商品详情页的常见�
 - **Open Food Facts**：按条形码查询，仅在超市缺失过敏原/膳食标签/
   营养信息时兜底（数据来源单独记录）。
 - **SQLite 存储**：`products`（当前快照）、`price_history`（每日价格点）、
-  `crawl_log`（抓取日志）。
+  `crawl_log`（抓取日志）、`product_groups`（跨店商品组）。
+- **跨店匹配**：GTIN 条形码 + 名称/品牌/规格归一化相似度，生成商品组，
+  供前端并排展示双店价格与成分。
 - **礼貌抓取**：请求间隔、指数退避重试、持久化 cookie、
   反爬拦截检测（"Pardon Our Interruption" / Incapsula）。
 - **免费稳定**：Coles 走公开 BFF API，无需住宅代理、无需频繁更换 IP。
@@ -38,6 +40,9 @@ python -m ausgrocery coles-product --slug lipton-ice-tea-sugar-free-ice-tea-lemo
 # Coles：抓一个品类（支持多页）
 python -m ausgrocery coles-crawl --category dairy-eggs-fridge --max-pages 1
 
+# 跨店匹配：生成商品组（GTIN + 名称相似度）
+python -m ausgrocery match --db data/grocery.db
+
 # Open Food Facts：按条形码查询
 python -m ausgrocery off --barcode 9300633556150
 
@@ -48,7 +53,7 @@ python -m ausgrocery probe coles lipton-ice-tea-sugar-free-ice-tea-lemon-iced-te
 
 结果写入 `data/*.json`（probe）与 `data/grocery.db`（抓取命令）。
 字段映射见 `docs/FIELD_MAPPING.zh-CN.md`，合规说明见
-`docs/DATA_SOURCES.zh-CN.md`。
+`docs/DATA_SOURCES.zh-CN.md`，跨店匹配算法见 `docs/MATCHING.zh-CN.md`。
 
 ## 行为说明
 

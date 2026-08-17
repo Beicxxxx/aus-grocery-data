@@ -24,7 +24,9 @@ origin.
 - Open Food Facts: barcode lookup used only to fill missing allergens /
   dietary tags / nutrition (source is recorded separately).
 - SQLite storage: `products` (current snapshot), `price_history`
-  (daily price points), `crawl_log`.
+  (daily price points), `crawl_log`, `product_groups` (cross-store groups).
+- Cross-store matching: GTIN barcodes first, then normalised
+  brand/size/name similarity, so the app can render both stores side by side.
 - Polite crawling: request delay, retries with backoff, persistent cookie
   jar, bot-challenge detection ("Pardon Our Interruption", Incapsula).
 - Real-browser fallback: automatic Playwright + Chrome kept as a last resort
@@ -45,6 +47,9 @@ python -m ausgrocery coles-product --slug lipton-ice-tea-sugar-free-ice-tea-lemo
 # Coles: one department (multi-page)
 python -m ausgrocery coles-crawl --category dairy-eggs-fridge --max-pages 1
 
+# Cross-store matching: rebuild product groups (GTIN + name similarity)
+python -m ausgrocery match --db data/grocery.db
+
 # Open Food Facts fallback by barcode
 python -m ausgrocery off --barcode 9300633556150
 
@@ -55,7 +60,8 @@ python -m ausgrocery probe coles lipton-ice-tea-sugar-free-ice-tea-lemon-iced-te
 
 Results are written to `data/*.json` (probe) and `data/grocery.db`
 (crawl commands). See `docs/FIELD_MAPPING.md` for the exact field mapping
-and `docs/DATA_SOURCES.md` for the licensing/compliance notes.
+and `docs/DATA_SOURCES.md` for the licensing/compliance notes; see
+`docs/MATCHING.zh-CN.md` for the matching algorithm.
 
 ## Notes on behaviour
 

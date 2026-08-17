@@ -9,6 +9,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ausgrocery.coles import Coles, extract_product_id, parse_coles_nutrition
 from ausgrocery.coles_queries import GRAPHQL_QUERIES
+from ausgrocery.matching import (
+    canonical_size,
+    normalize_barcode,
+    normalize_text,
+    rebuild_groups,
+)
 from ausgrocery.storage import init_db, upsert_product
 from ausgrocery.woolworths import Woolworths, parse_ww_nutrition
 
@@ -135,6 +141,107 @@ class TestColes(unittest.TestCase):
             row["nutrition"]["nutrients"]["Energy"],
             {"per_serving": "10 kJ", "per_100g": "4 kJ"},
         )
+
+
+class TestMatching(unittest.TestCase):
+    def _seed(self, conn, rows):
+        for r in rows:
+            conn.execute(
+                "INSERT INTO products (store, product_id, name, brand, size, barcode)"
+                " VALUES (?,?,?,?,?,?)",
+                r,
+            )
+        conn.commit()
+
+    def test_normalize(self):
+        self.assertEqual(normalize_text("Yoghurt Lite!"), "yogurt light")
+        self.assertEqual(normalize_text("café au lait"), "cafe au lait")
+        self.assertIsNone(normalize_barcode(""))
+        self.assertEqual(normalize_barcode(" 9300 6355 6150 "), "930063556150")
+        self.assertIsNone(normalize_barcode("123"))
+        self.assertEqual(canonical_size("1.5L"), "1.5 l")
+        self.assertEqual(canonical_size("300mL x 12 pack"), "300 ml x 12 pack")
+
+    def test_gtin_match(self):
+        conn = init_db(":memory:")
+        self._seed(conn, [
+            ("Woolworths", "1", "Bega Stringers Cheese 160g", "Bega", "160g",
+             "9310264910009"),
+            ("Coles", "2", "Cheese Stringers Original 8 Pack", "Bega", "160g",
+             "9310264910009"),
+        ])
+        report = rebuild_groups(conn)
+        self.assertEqual(report["total_groups"], 1)
+        self.assertEqual(report["cross_store_groups"], 1)
+        self.assertEqual(report["by_method"]["gtin"], 1)
+
+    def test_name_match_different_barcode(self):
+        conn = init_db(":memory:")
+        self._seed(conn, [
+            ("Woolworths", "1",
+             "Sunny Queen 12 Extra Large Free Range Eggs 700g",
+             "Sunny Queen", "700g", "1111111111111"),
+            ("Coles", "2",
+             "Free Range Extra Large Eggs 12 Pack",
+             "Sunny Queen", "700g", "2222222222222"),
+        ])
+        report = rebuild_groups(conn)
+        self.assertEqual(report["cross_store_groups"], 1)
+        # Each side had a different barcode (own GTIN group); the pair was
+        # linked by name, so the merged group is labelled gtin+name.
+        self.assertEqual(report["by_method"].get("gtin+name", 0), 1)
+
+    def test_different_brand_not_matched(self):
+        conn = init_db(":memory:")
+        self._seed(conn, [
+            ("Woolworths", "1", "Full Cream Milk 2L", "Dairy Farmers", "2L",
+             "1111111111111"),
+            ("Coles", "2", "Full Cream Milk 2L", "Pura", "2L",
+             "2222222222222"),
+        ])
+        report = rebuild_groups(conn)
+        self.assertEqual(report["cross_store_groups"], 0)
+        self.assertEqual(report["total_groups"], 2)
+
+    def test_different_size_not_matched(self):
+        conn = init_db(":memory:")
+        self._seed(conn, [
+            ("Woolworths", "1", "Full Cream Milk 1L", "Pura", "1L",
+             "1111111111111"),
+            ("Coles", "2", "Full Cream Milk 2L", "Pura", "2L",
+             "2222222222222"),
+        ])
+        report = rebuild_groups(conn)
+        self.assertEqual(report["cross_store_groups"], 0)
+
+    def test_store_brand_comparable(self):
+        conn = init_db(":memory:")
+        self._seed(conn, [
+            ("Woolworths", "1",
+             "Woolworths Full Cream Long Life Milk UHT 1L",
+             "Woolworths", "1L", "9300633386689"),
+            ("Coles", "2", "Full Cream Long Life Milk",
+             "Coles", "1L", "9300601325900"),
+        ])
+        report = rebuild_groups(conn)
+        self.assertEqual(report["cross_store_groups"], 1)
+
+    def test_rebuild_is_idempotent(self):
+        conn = init_db(":memory:")
+        self._seed(conn, [
+            ("Woolworths", "1", "Bega Stringers Cheese 160g", "Bega", "160g",
+             "9310264910009"),
+            ("Coles", "2", "Cheese Stringers Original 8 Pack", "Bega", "160g",
+             "9310264910009"),
+        ])
+        r1 = rebuild_groups(conn)
+        r2 = rebuild_groups(conn)
+        self.assertEqual(r1["total_groups"], r2["total_groups"])
+        self.assertEqual(r1["cross_store_groups"], r2["cross_store_groups"])
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM product_group_members"
+        ).fetchone()[0]
+        self.assertEqual(rows, 2)
 
 
 class TestColes(unittest.TestCase):

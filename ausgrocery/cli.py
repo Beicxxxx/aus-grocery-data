@@ -14,6 +14,7 @@ from pathlib import Path
 from . import config
 from .coles import Coles
 from .http import HttpError
+from .matching import rebuild_groups
 from .openfoodfacts import OpenFoodFacts, merge_fallback
 from .storage import init_db, log_crawl, now, upsert_product
 from .woolworths import Woolworths
@@ -203,6 +204,20 @@ def cmd_backfill_off(args) -> int:
     return 0
 
 
+def cmd_match(args) -> int:
+    db = init_db(args.db)
+    report = rebuild_groups(db, min_score=args.min_score)
+    print("== 跨店商品匹配报告 ==")
+    print(f"商品组总数: {report['total_groups']}")
+    print(f"跨店匹配组: {report['cross_store_groups']}")
+    print(f"匹配方式: {report['by_method']}")
+    print()
+    print("== 示例 ==")
+    for ex in report["examples"]:
+        print(f"  [{ex['method']}] {ex['ww']}  <->  {ex['coles']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="ausgrocery")
     p.add_argument("--db", default=str(config.DEFAULT_DB))
@@ -244,6 +259,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("backfill-off", parents=[common], help="backfill missing fields via barcode")
     sp.set_defaults(func=cmd_backfill_off)
+
+    sp = sub.add_parser("match", parents=[common],
+                        help="rebuild cross-store product groups (GTIN + name)")
+    sp.add_argument("--min-score", type=float, default=0.78,
+                    help="name similarity threshold (default 0.78)")
+    sp.set_defaults(func=cmd_match)
     return p
 
 

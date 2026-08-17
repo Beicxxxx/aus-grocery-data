@@ -53,6 +53,23 @@ CREATE TABLE IF NOT EXISTS crawl_log (
     status TEXT,
     message TEXT
 );
+
+CREATE TABLE IF NOT EXISTS product_groups (
+    group_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_key  TEXT NOT NULL UNIQUE,
+    method     TEXT NOT NULL,          -- gtin | name | gtin+name | single
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS product_group_members (
+    group_id   INTEGER NOT NULL REFERENCES product_groups(group_id)
+               ON DELETE CASCADE,
+    store      TEXT NOT NULL,
+    product_id TEXT NOT NULL,
+    PRIMARY KEY (group_id, store, product_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pgm_product
+    ON product_group_members (store, product_id);
 """
 
 
