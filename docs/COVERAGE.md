@@ -27,8 +27,30 @@ lunchbox、drinks、frozen），通过 BFF API 批量详情（48 个商品/请�
 
 ## 跨店匹配（Coles 全量 + 当前 WW 数据）
 
-14,312 个商品组，其中 146 组跨店可比。
-Woolworths 全量后该数字会显著上升。
+## Woolworths 食品/饮品全量（2026-08-18）
+
+11 个食品部门全量（fruit-veg、poultry-meat-seafood、deli、
+dairy-eggs-fridge、bakery、lunch-box、freezer、snacks-confectionery、
+pantry、international-foods、drinks）：
+
+| 指标 | 数值 |
+| --- | --- |
+| 处理商品记录 | 25,562 |
+| 唯一商品（products 表） | 15,944 |
+| 总耗时 | 约 40 分钟 |
+
+字段覆盖率：价格/图片 100%、条形码 79%、配料 68%、营养 67%、
+膳食标签 68%、过敏声明 65%（生鲜与非包装商品天然无配料/营养字段）。
+
+## 全量跨店匹配（两家全量后）
+
+24,273 个商品组，其中 **5,904 组跨店可比**（GTIN 精确匹配为主，
+名称/品牌/规格扩展 319 组）。示例（Chobani 全系列均精确匹配）：
+
+```text
+Chobani 15G Protein Greek Yogurt Banana Pouch 150g ($2.60)
+  <->  15g High Protein Greek Yogurt Banana Pouch ($3.30)
+```
 
 ## Woolworths 试点（3 个品类 × 2 页）
 
@@ -47,16 +69,14 @@ Woolworths 全量后该数字会显著上升。
 膳食标签示例：Halal 9 件、Vegan 103 件、Gluten Free 154 件
 （来自试点窗口的数据）。
 
-## 待办：Woolworths 全量
-
-Woolworths 在本次抓取开始时被 Akamai 临时标记，未能完成全量。
-恢复后执行：
+## 每日刷新
 
 ```powershell
 python -m ausgrocery food-all --db data/grocery.db
 ```
 
-（幂等：重复抓取只会覆盖更新同一批商品，不会产生重复行。）
+幂等：重复抓取只覆盖更新同一批商品，不会产生重复行；每次都会追加
+价格历史并重建跨店匹配。
 
 ## 结论
 

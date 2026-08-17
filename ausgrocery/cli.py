@@ -162,9 +162,9 @@ def _is_food(cat: dict) -> bool:
         return False
     food_markers = (
         "fruit", "veget", "meat", "seafood", "dairy", "egg", "fridge",
-        "bakery", "deli", "pantry", "drink", "frozen", "chip", "snack",
+        "bakery", "deli", "pantry", "drink", "frozen", "freezer", "chip", "snack",
         "health food", "wellness", "lunch", "world food", "dietary",
-        "chocolate", "confectionery", "biscuit", "breakfast", "coffee",
+        "international", "chocolate", "confectionery", "biscuit", "breakfast", "coffee",
         "tea", "sauce", "pasta", "rice", "cooking", "baby food",
     )
     return any(k in text for k in food_markers)
@@ -177,61 +177,63 @@ def cmd_food_all(args) -> int:
     total = {"Woolworths": 0, "Coles": 0}
 
     # ---- Woolworths --------------------------------------------------------
-    ww = Woolworths()
-    try:
-        cats = ww.list_categories()
-    except Exception as e:
-        print(f"Woolworths category discovery failed: {e}", file=sys.stderr)
-        cats = [{"id": c["id"], "name": c["name"], "url": c["url"]}
-                for c in config.EXAMPLE_DEPARTMENTS]
-    ww_cats = [c for c in cats if _is_food(c)]
-    print(f"Woolworths food departments: {[c.get('url') or c.get('name') for c in ww_cats]}")
-    for cat in ww_cats:
-        url_path = cat.get("url") or cat.get("id")
-        scope = f"{cat.get('id')}:{url_path}"
+    if args.store in ("ww", "both"):
+        ww = Woolworths()
         try:
-            for page_products in ww.crawl_category_all(cat["id"], url_path):
-                for p in page_products:
-                    try:
-                        row = ww.normalize(p)
-                        if not row.get("price"):
-                            continue
-                        upsert_product(db, row)
-                        total["Woolworths"] += 1
-                    except Exception as e:
-                        print(f"  skip {cat.get('name')}: {e}", file=sys.stderr)
-                print(f"  WW {cat.get('name')}: cumulative {total['Woolworths']}")
-        except HttpError as e:
-            log_crawl(db, started, "Woolworths", scope, "failed", str(e))
-            print(f"  WW department failed {cat.get('name')}: {e}", file=sys.stderr)
+            cats = ww.list_categories()
+        except Exception as e:
+            print(f"Woolworths category discovery failed: {e}", file=sys.stderr)
+            cats = [{"id": c["id"], "name": c["name"], "url": c["url"]}
+                    for c in config.EXAMPLE_DEPARTMENTS]
+        ww_cats = [c for c in cats if _is_food(c)]
+        print(f"Woolworths food departments: {[c.get('url') or c.get('name') for c in ww_cats]}")
+        for cat in ww_cats:
+            url_path = cat.get("url") or cat.get("id")
+            scope = f"{cat.get('id')}:{url_path}"
+            try:
+                for page_products in ww.crawl_category_all(cat["id"], url_path):
+                    for p in page_products:
+                        try:
+                            row = ww.normalize(p)
+                            if not row.get("price"):
+                                continue
+                            upsert_product(db, row)
+                            total["Woolworths"] += 1
+                        except Exception as e:
+                            print(f"  skip {cat.get('name')}: {e}", file=sys.stderr)
+                    print(f"  WW {cat.get('name')}: cumulative {total['Woolworths']}")
+            except HttpError as e:
+                log_crawl(db, started, "Woolworths", scope, "failed", str(e))
+                print(f"  WW department failed {cat.get('name')}: {e}", file=sys.stderr)
 
     # ---- Coles -------------------------------------------------------------
-    c = Coles()
-    try:
-        co_cats = [x for x in c.list_categories() if _is_food(x)]
-    except Exception as e:
-        print(f"Coles category discovery failed: {e}", file=sys.stderr)
-        co_cats = [{"id": x, "name": x, "url": x} for x in config.COLES_EXAMPLE_CATEGORIES]
-    print(f"Coles food departments: {[x.get('id') for x in co_cats]}")
-    for cat in co_cats:
-        slug = cat.get("id") or cat.get("url")
-        scope = slug
+    if args.store in ("coles", "both"):
+        c = Coles()
         try:
-            for page_products in c.crawl_category_all(slug):
-                ids = [str(t.get("id")) for t in page_products if t.get("id")]
-                for p in c.batch_products(ids):
-                    try:
-                        row = c.normalize(p)
-                        upsert_product(db, row)
-                        total["Coles"] += 1
-                    except Exception as e:
-                        print(f"  skip {cat.get('name')}: {e}", file=sys.stderr)
-                print(f"  Coles {cat.get('name')}: cumulative {total['Coles']}")
-        except HttpError as e:
-            log_crawl(db, started, "Coles", scope, "failed", str(e))
-            print(f"  Coles department failed {cat.get('name')}: {e}", file=sys.stderr)
-        finally:
-            c.close_browser()
+            co_cats = [x for x in c.list_categories() if _is_food(x)]
+        except Exception as e:
+            print(f"Coles category discovery failed: {e}", file=sys.stderr)
+            co_cats = [{"id": x, "name": x, "url": x} for x in config.COLES_EXAMPLE_CATEGORIES]
+        print(f"Coles food departments: {[x.get('id') for x in co_cats]}")
+        for cat in co_cats:
+            slug = cat.get("id") or cat.get("url")
+            scope = slug
+            try:
+                for page_products in c.crawl_category_all(slug):
+                    ids = [str(t.get("id")) for t in page_products if t.get("id")]
+                    for p in c.batch_products(ids):
+                        try:
+                            row = c.normalize(p)
+                            upsert_product(db, row)
+                            total["Coles"] += 1
+                        except Exception as e:
+                            print(f"  skip {cat.get('name')}: {e}", file=sys.stderr)
+                    print(f"  Coles {cat.get('name')}: cumulative {total['Coles']}")
+            except HttpError as e:
+                log_crawl(db, started, "Coles", scope, "failed", str(e))
+                print(f"  Coles department failed {cat.get('name')}: {e}", file=sys.stderr)
+            finally:
+                c.close_browser()
 
     log_crawl(db, started, "both", "food-all",
               "ok" if any(total.values()) else "failed",
@@ -365,6 +367,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("food-all", parents=[common],
                         help="crawl all food & drink departments at both stores")
+    sp.add_argument("--store", choices=["both", "ww", "coles"], default="both",
+                    help="which store(s) to crawl (default both)")
     sp.add_argument("--no-match", action="store_true",
                     help="skip the cross-store matching step")
     sp.add_argument("--min-score", type=float, default=0.78,

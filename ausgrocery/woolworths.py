@@ -39,6 +39,7 @@ class Woolworths:
             _url("/apis/ui/Search/products", searchTerm=term,
                  pageSize=page_size, pageNumber=page),
             headers={"Referer": f"{WW_BASE}/"},
+            no_cookies=True,
         )
         out = []
         for group in data.get("Products") or []:
@@ -53,6 +54,7 @@ class Woolworths:
         data = self.client.get_json(
             f"{WW_BASE}/apis/ui/PiesCategoriesWithSpecials",
             headers={"Referer": f"{WW_BASE}/shop/browse"},
+            no_cookies=True,
         )
         cats = data.get("Categories") or []
         out = []
