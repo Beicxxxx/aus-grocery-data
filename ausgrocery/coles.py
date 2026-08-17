@@ -29,10 +29,25 @@ class Coles:
             user_agent=config.UA_CHROME,
         )
         self._build_id: str | None = None
+        self._primed = False
+
+    def _prime(self) -> None:
+        """Visit a browse page once so Incapsula issues a session cookie
+        before product requests (mirrors the reference project's cookie
+        priming for Woolworths)."""
+        if self._primed:
+            return
+        try:
+            self.client.get(f"{COLES_BASE}/browse", headers={"Accept": "text/html"},
+                            allow_bot=True)
+        except Exception:
+            pass
+        self._primed = True
 
     # ---- buildId -----------------------------------------------------------
 
     def update_build_id(self) -> str:
+        self._prime()
         html = self.client.get(f"{COLES_BASE}/browse", headers={"Accept": "text/html"})
         m = re.search(r',"buildId":"([^"]+)"', html)
         if not m:
@@ -101,6 +116,7 @@ class Coles:
     # ---- product detail -----------------------------------------------------
 
     def product(self, slug: str) -> dict:
+        self._prime()
         html = self.client.get(f"{COLES_BASE}/product/{slug}")
         m = re.search(
             r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
