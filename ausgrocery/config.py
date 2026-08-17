@@ -1,5 +1,6 @@
 """Defaults for the crawler. Override on the CLI."""
 
+import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +23,21 @@ REQUEST_TIMEOUT = 30
 WWS_PAGE_SIZE = 36      # browse/category page size used by the reference project
 WWS_SEARCH_PAGE_SIZE = 24
 COLES_PRODUCTS_PER_PAGE = 48
+
+# Coles BFF (backend-for-frontend) API. The website ships this subscription
+# key in its public runtime config; requests carry it in the
+# ``ocp-apim-subscription-key`` header and bypass the Incapsula HTML layer.
+# Override with the COLES_SUBSCRIPTION_KEY env var if Coles rotates it.
+COLES_SUBSCRIPTION_KEY = os.environ.get(
+    "COLES_SUBSCRIPTION_KEY", "eae83861d1cd4de6bb9cd8a2cd6f041e"
+)
+COLES_GRAPHQL_URL = "https://www.coles.com.au/api/graphql"
+COLES_STORE_ID = "COL:0584"
+COLES_SHOPPING_METHOD = "DELIVERY"
+COLES_BUILD_ID_FILE = DATA_DIR / "coles_build_id.txt"
+# Last known-good Next.js buildId, verified against the live site. Used as a
+# bootstrap when the local cache is empty; refreshed automatically when stale.
+COLES_DEFAULT_BUILD_ID = "20260812.2-bb7ba0d5c9ea46ad61a08d677a91d58d0e18ba03"
 
 # Example categories (fallback when automatic category discovery fails).
 EXAMPLE_DEPARTMENTS = [

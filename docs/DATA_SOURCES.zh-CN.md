@@ -16,7 +16,10 @@
 ## "公开"在这里的含义
 
 - Woolworths 的搜索/品类接口允许匿名 HTTP 请求；网站本身无需登录即可浏览。
-- Coles 商品页为服务端渲染，详情 JSON 内嵌在 HTML 中；网站无需登录即可浏览。
+- Coles 网站自用的 BFF 接口（GraphQL `/api/graphql` 与
+  Next.js `/_next/data/...` JSON）允许携带其公开订阅密钥匿名请求；
+  网站本身无需登录即可浏览。密钥出现在每个访问者的浏览器里，
+  若 Coles 轮换密钥，可通过 `COLES_SUBSCRIPTION_KEY` 环境变量覆盖。
 - 两家均未发布第三方开发者 API 或数据许可。robots.txt 禁止
   `/search/`（Coles）与 `/shop/search`（Woolworths）；两家均使用
   反爬保护（Incapsula / Akamai）。

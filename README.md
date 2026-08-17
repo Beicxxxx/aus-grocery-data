@@ -15,19 +15,20 @@ origin.
 
 - Woolworths: full-category crawl via the public browse API (cookie priming +
   `POST /apis/ui/browse/category`, page size 36). Verified working.
-- Coles: product detail via the server-rendered `__NEXT_DATA__` JSON;
-  category listing via the Next.js `/_next/data/{buildId}/.../browse.json`
-  endpoint when reachable. If Incapsula challenges the lightweight client,
-  it automatically falls back to a real Chrome session (Playwright) so the
-  pipeline works even from flagged IPs.
+- Coles: product details via the site's own BFF API (GraphQL
+  `GetProductDetails`), category tree via GraphQL, and category listing via
+  the Next.js `/_next/data/{buildId}/.../browse.json` endpoint, all
+  authenticated with the public subscription key the site ships in its
+  runtime config. No proxy, no browser, and it works from an
+  Incapsula-flagged IP.
 - Open Food Facts: barcode lookup used only to fill missing allergens /
   dietary tags / nutrition (source is recorded separately).
 - SQLite storage: `products` (current snapshot), `price_history`
   (daily price points), `crawl_log`.
 - Polite crawling: request delay, retries with backoff, persistent cookie
   jar, bot-challenge detection ("Pardon Our Interruption", Incapsula).
-- Real-browser fallback: automatic Playwright + Chrome fallback for Coles
-  when the lightweight client is blocked.
+- Real-browser fallback: automatic Playwright + Chrome kept as a last resort
+  when the Coles HTML layer is needed (the BFF API is the default path).
 - Daily refresh: designed for one run per day (see `docs/DEPLOYMENT.md`).
 
 ## Quick start
@@ -40,6 +41,9 @@ python -m ausgrocery ww-crawl --category-id 1_6E4F4E4 --url dairy-eggs-fridge --
 
 # Coles: one product detail
 python -m ausgrocery coles-product --slug lipton-ice-tea-sugar-free-ice-tea-lemon-iced-tea-bottle-1.5l-5171521
+
+# Coles: one department (multi-page)
+python -m ausgrocery coles-crawl --category dairy-eggs-fridge --max-pages 1
 
 # Open Food Facts fallback by barcode
 python -m ausgrocery off --barcode 9300633556150
@@ -55,11 +59,13 @@ and `docs/DATA_SOURCES.md` for the licensing/compliance notes.
 
 ## Notes on behaviour
 
-- Coles (Imperva/Incapsula) can return a "Pardon Our Interruption" challenge
-  from an IP after a handful of requests. The lightweight client retries, then
-  automatically falls back to a real Chrome session via Playwright, which
-  Incapsula allows. Requires a local Chrome installation (the default on
-  Windows). Set `AUSGROCERY_NO_BROWSER=1` to disable the fallback.
+- Coles (Imperva/Incapsula) challenges HTML pages, but the site's own BFF
+  API (GraphQL + Next.js JSON) is reachable directly with the public
+  subscription key, independent of IP reputation. The `buildId` needed for
+  category listing is cached in `data/coles_build_id.txt` and refreshed from
+  the site or Wayback Machine when stale. A Playwright + Chrome session is
+  kept as a last-resort HTML fallback; set `AUSGROCERY_NO_BROWSER=1` to
+  disable it.
 - Woolworths (Akamai) is stricter with raw POSTs from datacentre IPs; the
   client first GETs a browse page to prime the cookie jar, which matched the
   behaviour of the reference project and worked from this machine.

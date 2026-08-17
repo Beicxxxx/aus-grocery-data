@@ -1,28 +1,52 @@
-"""Coles product detail + category listing.
+"""Coles product detail + category listing via the public BFF API.
 
-Verified: product detail via the server-rendered `__NEXT_DATA__` JSON
-(name, price, images, ingredients, storage, usage, origin, nutrition
-breakdown, long description).
+Coles' website is fronted by Incapsula on the HTML pages, but its backend
+JSON/GraphQL API (used by the web client itself) is reachable directly when
+requests carry the subscription key that the site ships in its runtime
+config.  That gives us a free, proxy-free path that works from a flagged IP:
 
-Category listing follows the Next.js JSON endpoint used by
-aus_grocery_price_database: extract buildId from /browse, then
-GET /_next/data/{buildId}/en/browse/{category}.json?slug=...&page=N.
-That endpoint needs an IP that is not flagged by Incapsula.
+* product details  -> GraphQL ``GetProductDetails`` (no buildId needed)
+* category tree    -> GraphQL ``GetShopProductsMenu``
+* category listing -> Next.js ``/_next/data/<buildId>/en/browse/...json``
+
+The Next.js JSON endpoint requires the current ``buildId``; when it goes
+stale we refresh it from the site's public page or from the latest Wayback
+Machine snapshot of the homepage.
 """
 
 from __future__ import annotations
 
+import http.cookiejar
 import json
 import os
 import re
-import http.cookiejar
+import time
+import urllib.parse
+import urllib.request
 from typing import Any, Iterable
 
 from . import config
 from . import browser as browser_fallback
+from .coles_queries import GRAPHQL_QUERIES
 from .http import HttpClient, HttpError
 
 COLES_BASE = "https://www.coles.com.au"
+WAYBACK_CDX = "https://web.archive.org/cdx/search/cdx"
+WAYBACK_WEB = "https://web.archive.org/web"
+
+
+def extract_product_id(slug: str) -> str | None:
+    """Pull the trailing numeric id from a Coles product slug.
+
+    ``lipton-...-bottle-1.5l-5171521`` -> ``5171521``
+    ``8150288``                         -> ``8150288``
+    """
+    m = re.search(r"-(\d{4,})$", slug.strip())
+    if m:
+        return m.group(1)
+    if re.fullmatch(r"\d{4,}", slug.strip()):
+        return slug.strip()
+    return None
 
 
 class Coles:
@@ -31,19 +55,72 @@ class Coles:
             cookie_file=config.DATA_DIR / "cookies_coles.txt",
             user_agent=config.UA_CHROME,
         )
-        self._build_id: str | None = None
+        self.api_key = config.COLES_SUBSCRIPTION_KEY
+        self.store_id = config.COLES_STORE_ID
+        self.shopping_method = config.COLES_SHOPPING_METHOD
+        self._build_id: str | None = self._load_build_id()
         self._primed = False
         self._browser: browser_fallback.BrowserSession | None = None
 
+    # ---- helpers -----------------------------------------------------------
+
+    def _headers(self, extra: dict | None = None) -> dict:
+        h = {"ocp-apim-subscription-key": self.api_key}
+        if extra:
+            h.update(extra)
+        return h
+
+    def _gql(self, operation: str, variables: dict) -> dict:
+        """POST one of the site's own GraphQL operations."""
+        payload = {
+            "query": GRAPHQL_QUERIES[operation],
+            "variables": variables,
+            "operationName": operation,
+        }
+        try:
+            data = self.client.post_json(
+                config.COLES_GRAPHQL_URL,
+                payload,
+                headers=self._headers({"Accept": "application/json"}),
+                no_cookies=True,
+            )
+        except HttpError as e:
+            raise HttpError(f"Coles GraphQL {operation} failed: {e}") from e
+        errors = data.get("errors")
+        if errors:
+            msgs = "; ".join(str(x.get("message")) for x in errors)
+            raise HttpError(f"Coles GraphQL {operation}: {msgs}")
+        return data
+
+    def _load_build_id(self) -> str | None:
+        try:
+            cached = (
+                config.COLES_BUILD_ID_FILE.read_text(encoding="utf-8").strip()
+                or None
+            )
+            if cached:
+                return cached
+        except OSError:
+            pass
+        return config.COLES_DEFAULT_BUILD_ID
+
+    def _save_build_id(self, bid: str) -> None:
+        try:
+            config.COLES_BUILD_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
+            config.COLES_BUILD_ID_FILE.write_text(bid, encoding="utf-8")
+        except OSError:
+            pass
+
     def _prime(self) -> None:
-        """Visit a browse page once so Incapsula issues a session cookie
-        before product requests (mirrors the reference project's cookie
-        priming for Woolworths)."""
+        """Best-effort cookie priming for the HTML fallback path."""
         if self._primed:
             return
         try:
-            self.client.get(f"{COLES_BASE}/browse", headers={"Accept": "text/html"},
-                            allow_bot=True)
+            self.client.get(
+                f"{COLES_BASE}/browse",
+                headers=self._headers({"Accept": "text/html"}),
+                allow_bot=True,
+            )
         except Exception:
             pass
         self._primed = True
@@ -51,26 +128,104 @@ class Coles:
     # ---- buildId -----------------------------------------------------------
 
     def update_build_id(self) -> str:
+        """Refresh the Next.js buildId: site page -> Wayback -> error."""
         self._prime()
-        html = self._fetch_html(f"{COLES_BASE}/browse")
-        m = re.search(r',"buildId":"([^"]+)"', html)
-        if not m:
-            raise RuntimeError("could not extract Coles buildId")
-        self._build_id = m.group(1)
-        return self._build_id
+        try:
+            html = self.client.get(
+                f"{COLES_BASE}/browse",
+                headers=self._headers({"Accept": "text/html"}),
+                allow_bot=True,
+            )
+            bid = _extract_build_id(html)
+            if bid:
+                self._build_id = bid
+                self._save_build_id(bid)
+                return bid
+        except Exception:
+            pass
+        bid = self._build_id_from_wayback()
+        if bid:
+            self._build_id = bid
+            self._save_build_id(bid)
+            return bid
+        raise RuntimeError(
+            "could not resolve Coles buildId (browse page blocked and "
+            "no Wayback snapshot available)"
+        )
 
     def build_id(self) -> str:
         if not self._build_id:
             self.update_build_id()
         return self._build_id
 
-    # ---- category listing ---------------------------------------------------
+    def _build_id_from_wayback(self) -> str | None:
+        """Extract the current buildId from recent archived homepages."""
+        # 1) List recent snapshots of the homepage (newest last).
+        q = urllib.parse.urlencode({
+            "url": "www.coles.com.au/",
+            "from": "20260101",
+            "output": "json",
+            "fl": "timestamp,original",
+            "filter": ["statuscode:200", "mimetype:text/html"],
+            "collapse": "digest",
+            "limit": "10",
+        }, doseq=True)
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(
+                    f"{WAYBACK_CDX}?{q}",
+                    headers={"User-Agent": "Mozilla/5.0"},
+                ),
+                timeout=60,
+            ) as r:
+                rows = json.loads(r.read().decode("utf-8", "ignore"))
+        except Exception:
+            return None
+        # 2) Try each snapshot, newest first, with a small retry.
+        for ts in (row[0] for row in rows[1:] if row):
+            url = f"{WAYBACK_WEB}/{ts}id_/https://www.coles.com.au/"
+            for _ in range(2):
+                try:
+                    with urllib.request.urlopen(
+                        urllib.request.Request(
+                            url,
+                            headers={"User-Agent": "Mozilla/5.0"},
+                        ),
+                        timeout=60,
+                    ) as r:
+                        html = r.read(2_000_000).decode("utf-8", "ignore")
+                    bid = _extract_build_id(html)
+                    if bid:
+                        return bid
+                    break
+                except Exception:
+                    time.sleep(1)
+        return None
+
+    # ---- category tree -----------------------------------------------------
 
     def list_categories(self) -> list[dict]:
-        bid = self.build_id()
-        url = f"{COLES_BASE}/_next/data/{bid}/en/browse.json"
         try:
-            data = self.client.get_json(url, headers={"Accept": "application/json"})
+            data = self._gql("GetShopProductsMenu", {
+                "storeId": self.store_id,
+                "withCampaignLinks": False,
+                "campaignCount": 0,
+            })
+            nodes = data["data"]["menuItems"]["items"]
+            return [
+                {"id": n.get("seoToken") or n.get("id"), "name": n.get("name")}
+                for n in nodes
+                if n.get("seoToken")
+            ]
+        except HttpError:
+            pass
+        bid = self.build_id()
+        try:
+            data = self.client.get_json(
+                f"{COLES_BASE}/_next/data/{bid}/en/browse.json",
+                headers=self._headers({"Accept": "application/json"}),
+                no_cookies=True,
+            )
         except HttpError:
             html = self._fetch_html(f"{COLES_BASE}/browse")
             data = _extract_next_data(html)
@@ -84,6 +239,8 @@ class Coles:
             for n in nodes if n.get("seoToken")
         ]
 
+    # ---- category listing ---------------------------------------------------
+
     def crawl_category(self, category: str, page: int = 1) -> tuple[list[dict], int]:
         bid = self.build_id()
         url = (
@@ -91,10 +248,25 @@ class Coles:
             f"?slug={category}&page={page}"
         )
         try:
-            data = self.client.get_json(url, headers={"Accept": "application/json"})
+            data = self.client.get_json(
+                url,
+                headers=self._headers({"Accept": "application/json"}),
+                no_cookies=True,
+            )
         except HttpError:
-            html = self._fetch_html(f"{COLES_BASE}/browse/{category}?page={page}")
-            data = _extract_next_data(html)
+            # Stale buildId (Coles rebuilds often): refresh once and retry.
+            self._build_id = None
+            self.update_build_id()
+            bid = self.build_id()
+            url = (
+                f"{COLES_BASE}/_next/data/{bid}/en/browse/{category}.json"
+                f"?slug={category}&page={page}"
+            )
+            data = self.client.get_json(
+                url,
+                headers=self._headers({"Accept": "application/json"}),
+                no_cookies=True,
+            )
         results = (
             data.get("pageProps", {})
             .get("searchResults", {})
@@ -126,6 +298,33 @@ class Coles:
     # ---- product detail -----------------------------------------------------
 
     def product(self, slug: str) -> dict:
+        """Fetch one product: GraphQL first, then Next.js JSON, then HTML."""
+        pid = extract_product_id(slug)
+        if pid:
+            try:
+                data = self._gql("GetProductDetails", {
+                    "storeId": self.store_id,
+                    "productId": pid,
+                    "shoppingMethod": self.shopping_method,
+                    "useV2NipAndAllergens": True,
+                })
+                p = data.get("data", {}).get("product")
+                if p:
+                    return p
+            except HttpError:
+                pass
+        try:
+            bid = self.build_id()
+            data = self.client.get_json(
+                f"{COLES_BASE}/_next/data/{bid}/en/product/{slug}.json?slug={slug}",
+                headers=self._headers({"Accept": "application/json"}),
+                no_cookies=True,
+            )
+            p = data.get("pageProps", {}).get("product")
+            if p:
+                return p
+        except HttpError:
+            pass
         self._prime()
         html = self._fetch_html(f"{COLES_BASE}/product/{slug}")
         return self.parse_product_html(html)
@@ -148,7 +347,10 @@ class Coles:
     def _fetch_html(self, url: str) -> str:
         """Lightweight HTTP first; real-browser fallback on bot challenge."""
         try:
-            return self.client.get(url, headers={"Accept": "text/html"})
+            return self.client.get(
+                url,
+                headers=self._headers({"Accept": "text/html"}),
+            )
         except HttpError as e:
             if "bot challenge" in str(e) and not os.environ.get("AUSGROCERY_NO_BROWSER"):
                 return self._fetch_with_browser(url)
@@ -259,6 +461,11 @@ def _as_list(value) -> list[str] | None:
     if isinstance(value, list):
         return [str(x).strip() for x in value if str(x).strip()]
     return [x.strip() for x in str(value).split(",") if x.strip()]
+
+
+def _extract_build_id(html: str) -> str | None:
+    m = re.search(r',"buildId":"([^"]+)"', html)
+    return m.group(1) if m else None
 
 
 def _extract_next_data(html: str) -> dict:

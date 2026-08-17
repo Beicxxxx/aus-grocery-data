@@ -125,7 +125,8 @@ def cmd_coles_crawl(args) -> int:
     try:
         for page_products in c.crawl_category_all(args.category, args.max_pages):
             for tile in page_products:
-                slug = (tile.get("url") or "").rsplit("/", 1)[-1]
+                # Category tiles carry an id but no url; GraphQL only needs the id.
+                slug = str(tile.get("id") or "")
                 if not slug:
                     continue
                 try:
@@ -138,7 +139,7 @@ def cmd_coles_crawl(args) -> int:
             print(f"  page ok, cumulative {count}")
         log_crawl(db, started, "Coles", args.category, "ok", f"{count} products")
         print(f"done: {count} products")
-    except HttpError as e:
+    except (HttpError, RuntimeError) as e:
         log_crawl(db, started, "Coles", args.category, "failed", str(e))
         print(f"crawl failed: {e}", file=sys.stderr)
         return 1

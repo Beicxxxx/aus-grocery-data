@@ -1,18 +1,22 @@
-# 真实浏览器兜底（Coles 反爬）
+# 浏览器兜底（Coles 最后手段）
 
 ## 背景
 
-Coles 使用 Imperva/Incapsula 反爬。同一 IP 连续请求后会返回
-"Pardon Our Interruption" 人机挑战页，且该标记会持续一段时间。
-轻量 HTTP 客户端（curl_cffi / urllib）在 IP 被标记后无法直接通过。
+Coles 使用 Imperva/Incapsula 反爬，**HTML 页面层**在 IP 被标记后会返回
+"Pardon Our Interruption" 人机挑战页。但网站自用的 BFF 接口
+（GraphQL `/api/graphql` 与 Next.js `/_next/data/...` JSON）不受此限制：
+携带网站公开发布的订阅密钥后，从被标记的 IP 也能直接返回数据。
 
-实测（2026-08-17）：
+因此本项目的默认路径完全不需要浏览器：
 
-- curl.exe / curl_cffi / urllib 在 IP 被标记时全部被拦；
-- Playwright + 本机 Chrome（headless）可以正常拿到真实商品页；
-- 浏览器会执行 Incapsula 的 JavaScript 校验，因此基本不受 IP 标记影响。
+1. 商品详情 -> GraphQL `GetProductDetails`（无需 buildId）；
+2. 品类树   -> GraphQL `GetShopProductsMenu`；
+3. 品类列表 -> Next.js `/_next/data/{buildId}/en/browse/...json`。
 
-## 实现
+浏览器仅在**极端兜底**时使用：当 BFF 接口本身失效（例如 Coles 改版），
+需要直接抓取 HTML 页面时，才启动 Playwright + 本机 Chrome 会话。
+
+## 浏览器会话实现
 
 `ausgrocery/browser.py` 提供 `BrowserSession`（持久会话）：
 
@@ -30,11 +34,17 @@ Coles 使用 Imperva/Incapsula 反爬。同一 IP 连续请求后会返回
    自动改用 Playwright 抓取同一 URL；
 3. 浏览器抓取失败时重试一次，仍失败则抛出明确错误。
 
-浏览器会话在整个 CLI 命令结束后自动关闭（`close_browser`），
-不会残留后台进程。
+## buildId 刷新策略
 
-分类列表（`_next/data`）同样支持浏览器兜底：
-直接访问 `/browse/{category}?page=N`，从 `__NEXT_DATA__` 解析结果。
+品类列表依赖 Next.js 的 `buildId`，该值会随 Coles 部署更新而失效。
+刷新顺序：
+
+1. 本地缓存 `data/coles_build_id.txt`（上次成功解析的值）；
+2. 仓库内置"最后已知可用"默认值（验证过当前站点兼容）；
+3. 直接请求 `/browse` 页面（若未被 Incapsula 拦截）；
+4. Wayback Machine 最近首页快照（解析其中的 buildId）。
+
+`buildId` 通常几天到一周才变一次，日常每日抓取几乎不会走到第 3、4 步。
 
 ## 依赖
 
@@ -43,25 +53,11 @@ python -m pip install -r requirements.txt
 ```
 
 - `curl_cffi`：轻量请求的 TLS 指纹模拟；
-- `playwright`：浏览器兜底；
+- `playwright`：浏览器兜底（默认路径不会启动）；
 - 本机需安装 Google Chrome（`channel="chrome"` 直接复用，无需下载浏览器）。
 
 ## 可选开关
 
-设置环境变量 `AUSGROCERY_NO_BROWSER=1` 可禁用浏览器兜底
-（例如在无图形界面的服务器上不希望启动 Chrome）。
-
-`AUSGROCERY_BROWSER_HEADED=1` 可强制有头模式（便于调试时观察）。
-
-## 性能提示
-
-首次浏览器启动约 5–8 秒；之后同一会话内每个商品约 3–5 秒。
-只有被拦截时才触发，正常路径仍是轻量请求。
-
-## 已知边界
-
-- Incapsula 的会话 cookie 与 IP 绑定：换 IP 后旧 cookie 失效属正常，
-  浏览器会话会自动重新建立。
-- 被**长期标记**的 IP（例如持续高频请求过的 IP）可能连真实浏览器也
-  收到持久挑战。此时需要换网络（手机热点）或等待标记降级
-  （通常数小时到一天）。这是网站风控策略，不是代码问题。
+- `AUSGROCERY_NO_BROWSER=1`：禁用浏览器兜底；
+- `AUSGROCERY_BROWSER_HEADED=1`：强制有头模式（便于调试时观察）；
+- `COLES_SUBSCRIPTION_KEY=xxx`：Coles 轮换订阅密钥时覆盖。

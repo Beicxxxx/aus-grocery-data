@@ -7,7 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ausgrocery.coles import Coles, parse_coles_nutrition
+from ausgrocery.coles import Coles, extract_product_id, parse_coles_nutrition
+from ausgrocery.coles_queries import GRAPHQL_QUERIES
 from ausgrocery.storage import init_db, upsert_product
 from ausgrocery.woolworths import Woolworths, parse_ww_nutrition
 
@@ -77,6 +78,63 @@ class TestWoolworths(unittest.TestCase):
             '{"Name": "Sodium Quantity Per Serve - Total - NIP", "Value": "18.0mg"}]}')
         self.assertEqual(rows, {"Sodium": {"100g": "7.0mg", "Serve": "18.0mg"}})
         self.assertIsNone(parse_ww_nutrition(None))
+
+
+class TestColes(unittest.TestCase):
+    def test_extract_product_id(self):
+        self.assertEqual(
+            extract_product_id(
+                "lipton-ice-tea-sugar-free-ice-tea-lemon-iced-tea-bottle-1.5l-5171521"
+            ),
+            "5171521",
+        )
+        self.assertIsNone(extract_product_id("no-id-here"))
+
+    def test_graphql_queries_present(self):
+        for op in ("GetProductDetails", "GetShopProductsMenu"):
+            self.assertIn(op, GRAPHQL_QUERIES)
+            self.assertIn(f"query {op}", GRAPHQL_QUERIES[op])
+        self.assertIn(
+            "productVariationsFields",
+            GRAPHQL_QUERIES["GetProductDetails"],
+        )
+
+    def test_normalize_graphql_shape(self):
+        raw = {
+            "id": 5171521,
+            "name": "Ice Tea Sugar Free Ice Tea Lemon Iced Tea Bottle",
+            "brand": "Lipton",
+            "size": "1.5L",
+            "gtin": "9300633000004",
+            "pricing": {"now": 5.5, "was": None, "comparable": "$3.67/ 1L"},
+            "images": [{"zoom": {"path": "/wcsstore/Coles-CAS/images/5/1/7/5171521-zm.jpg"}}],
+            "additionalInfo": [
+                {"title": "Ingredients", "description": "Water, Black Tea Extract (4%)."},
+                {"title": "Storage instructions", "description": "Store in a cool, dry place."},
+            ],
+            "countryOfOrigin": {"country": "Australia"},
+            "longDescription": "Our favourite ice tea...",
+            "lifestyle": ["Vegan"],
+            "nutrition": {
+                "servingsPerPackage": "6.00",
+                "servingSize": "250ml",
+                "breakdown": [
+                    {"title": "Per Serving", "nutrients": [
+                        {"nutrient": "Energy", "value": "10 kJ"}]},
+                    {"title": "Per 100g/ml", "nutrients": [
+                        {"nutrient": "Energy", "value": "4 kJ"}]},
+                ],
+            },
+        }
+        row = Coles().normalize(raw)
+        self.assertEqual(row["product_id"], "5171521")
+        self.assertEqual(row["price"], 5.5)
+        self.assertEqual(row["ingredients"], "Water, Black Tea Extract (4%).")
+        self.assertEqual(row["dietary"], ["Vegan"])
+        self.assertEqual(
+            row["nutrition"]["nutrients"]["Energy"],
+            {"per_serving": "10 kJ", "per_100g": "4 kJ"},
+        )
 
 
 class TestColes(unittest.TestCase):

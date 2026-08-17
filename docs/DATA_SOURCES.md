@@ -19,8 +19,11 @@ Do not describe retailer pages as "open data".
 
 - Woolworths search/category endpoints answer anonymous HTTP requests; the
   website itself is publicly browsable without login.
-- Coles product pages are server-rendered and the detail JSON is embedded in
-  the HTML; the site is publicly browsable without login.
+- Coles' own BFF endpoints (GraphQL `/api/graphql` and Next.js
+  `/_next/data/...` JSON) answer anonymous requests carrying the public
+  subscription key that the site ships in every visitor's browser; the site
+  is publicly browsable without login. If Coles rotates the key, override it
+  with the `COLES_SUBSCRIPTION_KEY` environment variable.
 - Neither retailer publishes a developer API or data licence for third-party
   use. robots.txt disallows `/search/` (Coles) and `/shop/search` (Woolworths);
   both use anti-bot protection (Incapsula / Akamai).

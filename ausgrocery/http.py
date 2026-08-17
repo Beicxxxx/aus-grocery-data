@@ -80,6 +80,7 @@ class HttpClient:
         *,
         expect_json: bool = False,
         allow_bot: bool = False,
+        no_cookies: bool = False,
     ) -> str:
         last_err: Exception | None = None
         for attempt in range(self.retries + 1):
@@ -87,7 +88,7 @@ class HttpClient:
             if headers:
                 h.update(headers)
             try:
-                text = self._raw_request(url, method, h, body)
+                text = self._raw_request(url, method, h, body, no_cookies=no_cookies)
                 if not allow_bot and is_bot_challenge(text):
                     # Incapsula/Akamai set session cookies on the challenge page;
                     # save them so the retry carries the session.
@@ -113,7 +114,15 @@ class HttpClient:
                     time.sleep(2 ** attempt)
         raise HttpError(f"request failed after {self.retries + 1} tries: {last_err}")
 
-    def _raw_request(self, url: str, method: str, headers: dict, body: bytes | None) -> str:
+    def _raw_request(
+        self,
+        url: str,
+        method: str,
+        headers: dict,
+        body: bytes | None,
+        *,
+        no_cookies: bool = False,
+    ) -> str:
         """Issue one HTTP request. Prefers curl_cffi (Chrome TLS fingerprint)
         which passes Coles' Incapsula, falls back to urllib."""
         if _HAS_CURL_CFFI:
@@ -121,7 +130,7 @@ class HttpClient:
                 resp = cffi_requests.request(
                     method, url, headers=headers, data=body,
                     timeout=self.timeout, impersonate="chrome120",
-                    cookies=self._cffi_cookies(),
+                    cookies={} if no_cookies else self._cffi_cookies(),
                     verify=True,
                 )
                 self._update_jar_from_cffi(resp)
@@ -129,7 +138,8 @@ class HttpClient:
             except Exception:
                 pass  # fall back to urllib
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
-        with self.opener.open(req, timeout=self.timeout) as resp:
+        opener = urllib.request.build_opener() if no_cookies else self.opener
+        with opener.open(req, timeout=self.timeout) as resp:
             return resp.read().decode("utf-8", "ignore")
 
     def _cffi_cookies(self) -> dict:
@@ -150,15 +160,24 @@ class HttpClient:
                 discard=True, comment=None, comment_url=None, rest={}, rfc2109=False,
             ))
 
-    def get(self, url: str, headers: dict | None = None, **kw) -> str:
+    def get(
+        self,
+        url: str,
+        headers: dict | None = None,
+        *,
+        no_cookies: bool = False,
+        **kw,
+    ) -> str:
         self._sleep()
-        return self.request(url, "GET", headers, **kw)
+        return self.request(url, "GET", headers, no_cookies=no_cookies, **kw)
 
     def post(
         self,
         url: str,
         payload: dict,
         headers: dict | None = None,
+        *,
+        no_cookies: bool = False,
         **kw,
     ) -> str:
         self._sleep()
@@ -166,10 +185,39 @@ class HttpClient:
         h = {"Content-Type": "application/json"}
         if headers:
             h.update(headers)
-        return self.request(url, "POST", h, body, **kw)
+        return self.request(url, "POST", h, body, no_cookies=no_cookies, **kw)
 
-    def get_json(self, url: str, headers: dict | None = None, **kw) -> dict:
+    def get_json(
+        self,
+        url: str,
+        headers: dict | None = None,
+        *,
+        no_cookies: bool = False,
+        **kw,
+    ) -> dict:
         text = self.get(
-            url, headers={"Accept": "application/json", **(headers or {})}, **kw
+            url,
+            headers={"Accept": "application/json", **(headers or {})},
+            no_cookies=no_cookies,
+            **kw,
+        )
+        return json.loads(text)
+
+    def post_json(
+        self,
+        url: str,
+        payload: dict,
+        headers: dict | None = None,
+        *,
+        no_cookies: bool = False,
+        **kw,
+    ) -> dict:
+        """POST JSON and parse the JSON response (used by the GraphQL API)."""
+        text = self.post(
+            url,
+            payload,
+            headers={"Accept": "application/json", **(headers or {})},
+            no_cookies=no_cookies,
+            **kw,
         )
         return json.loads(text)
