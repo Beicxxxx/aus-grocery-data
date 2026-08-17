@@ -16,8 +16,9 @@ origin.
 - Woolworths: full-category crawl via the public browse API (cookie priming +
   `POST /apis/ui/browse/category`, page size 36). Verified working.
 - Coles: product details via the site's own BFF API (GraphQL
-  `GetProductDetails`), category tree via GraphQL, and category listing via
-  the Next.js `/_next/data/{buildId}/.../browse.json` endpoint, all
+  `GetProductDetails`, batched 48 products per request), category tree via
+  GraphQL, and category listing via the Next.js
+  `/_next/data/{buildId}/.../browse.json` endpoint, all
   authenticated with the public subscription key the site ships in its
   runtime config. No proxy, no browser, and it works from an
   Incapsula-flagged IP.
@@ -32,6 +33,9 @@ origin.
 - Real-browser fallback: automatic Playwright + Chrome kept as a last resort
   when the Coles HTML layer is needed (the BFF API is the default path).
 - Daily refresh: designed for one run per day (see `docs/DEPLOYMENT.md`).
+- One-command full crawl: `food-all` covers every food & drink department at
+  both stores, then runs cross-store matching automatically. Coles batching
+  keeps a 20k+ SKU full crawl at roughly 30 minutes.
 
 ## Quick start
 
@@ -49,6 +53,9 @@ python -m ausgrocery coles-crawl --category dairy-eggs-fridge --max-pages 1
 
 # Cross-store matching: rebuild product groups (GTIN + name similarity)
 python -m ausgrocery match --db data/grocery.db
+
+# Full food & drink crawl (both stores + auto match)
+python -m ausgrocery food-all --db data/grocery.db
 
 # Open Food Facts fallback by barcode
 python -m ausgrocery off --barcode 9300633556150

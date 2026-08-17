@@ -9,8 +9,8 @@ Open Food Facts 补齐缺失字段。输出字段对应商品详情页的常见�
 
 - **Woolworths**：通过公开浏览 API 进行全品类抓取（先访问浏览页预热
   cookie，再 `POST /apis/ui/browse/category`，每页 36 条）。已实测可用。
-- **Coles**：优先走网站自用 BFF API——GraphQL `GetProductDetails`
-  拿商品详情、GraphQL `GetShopProductsMenu` 拿品类树、
+- **Coles**：优先走网站自用 BFF API——GraphQL `GetProductDetails` 批量变体
+  一次请求 48 个商品详情、GraphQL `GetShopProductsMenu` 拿品类树、
   Next.js `/_next/data/{buildId}/en/browse/...json` 拿品类列表。
   请求携带网站公开发布的订阅密钥（`ocp-apim-subscription-key`），
   不需要代理、不需要浏览器，被 Incapsula 标记的 IP 也能直接抓取；
@@ -24,6 +24,8 @@ Open Food Facts 补齐缺失字段。输出字段对应商品详情页的常见�
 - **礼貌抓取**：请求间隔、指数退避重试、持久化 cookie、
   反爬拦截检测（"Pardon Our Interruption" / Incapsula）。
 - **免费稳定**：Coles 走公开 BFF API，无需住宅代理、无需频繁更换 IP。
+- **全量抓取**：`food-all` 一条命令抓完两家所有食品/饮品部门，
+  Coles 批量详情让 2 万+ 商品在约 30 分钟内完成。
 - **每日刷新**：按每天一轮设计（见 `docs/DEPLOYMENT.zh-CN.md`）。
 
 ## 快速开始
@@ -42,6 +44,9 @@ python -m ausgrocery coles-crawl --category dairy-eggs-fridge --max-pages 1
 
 # 跨店匹配：生成商品组（GTIN + 名称相似度）
 python -m ausgrocery match --db data/grocery.db
+
+# 全食品/饮品全量抓取（两家 + 自动跨店匹配）
+python -m ausgrocery food-all --db data/grocery.db
 
 # Open Food Facts：按条形码查询
 python -m ausgrocery off --barcode 9300633556150
