@@ -17,15 +17,17 @@ origin.
   `POST /apis/ui/browse/category`, page size 36). Verified working.
 - Coles: product detail via the server-rendered `__NEXT_DATA__` JSON;
   category listing via the Next.js `/_next/data/{buildId}/.../browse.json`
-  endpoint when reachable. Detail parse verified; listing follows the
-  approach used by the Go project below and needs a live IP that is not
-  flagged by Incapsula.
+  endpoint when reachable. If Incapsula challenges the lightweight client,
+  it automatically falls back to a real Chrome session (Playwright) so the
+  pipeline works even from flagged IPs.
 - Open Food Facts: barcode lookup used only to fill missing allergens /
   dietary tags / nutrition (source is recorded separately).
 - SQLite storage: `products` (current snapshot), `price_history`
   (daily price points), `crawl_log`.
 - Polite crawling: request delay, retries with backoff, persistent cookie
   jar, bot-challenge detection ("Pardon Our Interruption", Incapsula).
+- Real-browser fallback: automatic Playwright + Chrome fallback for Coles
+  when the lightweight client is blocked.
 - Daily refresh: designed for one run per day (see `docs/DEPLOYMENT.md`).
 
 ## Quick start
@@ -54,10 +56,10 @@ and `docs/DATA_SOURCES.md` for the licensing/compliance notes.
 ## Notes on behaviour
 
 - Coles (Imperva/Incapsula) can return a "Pardon Our Interruption" challenge
-  from an IP after a handful of requests. The client retries with backoff and
-  reports the challenge instead of guessing. Re-running later, or from a
-  residential/home IP that has not been flagged, usually works (verified:
-  the same product page parsed correctly before the flag).
+  from an IP after a handful of requests. The lightweight client retries, then
+  automatically falls back to a real Chrome session via Playwright, which
+  Incapsula allows. Requires a local Chrome installation (the default on
+  Windows). Set `AUSGROCERY_NO_BROWSER=1` to disable the fallback.
 - Woolworths (Akamai) is stricter with raw POSTs from datacentre IPs; the
   client first GETs a browse page to prime the cookie jar, which matched the
   behaviour of the reference project and worked from this machine.

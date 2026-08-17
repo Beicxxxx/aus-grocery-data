@@ -11,13 +11,16 @@ Open Food Facts 补齐缺失字段。输出字段对应商品详情页的常见�
   cookie，再 `POST /apis/ui/browse/category`，每页 36 条）。已实测可用。
 - **Coles**：商品详情通过服务端渲染的 `__NEXT_DATA__` JSON 解析；
   品类列表使用 Next.js `/_next/data/{buildId}/.../browse.json` 接口
-  （参考项目方案，需未被 Incapsula 风控的 IP）。
+  （参考项目方案）。若轻量请求被 Incapsula 拦截，会自动降级到
+  真实 Chrome 会话（Playwright），被风控的 IP 也能正常抓取。
 - **Open Food Facts**：按条形码查询，仅在超市缺失过敏原/膳食标签/
   营养信息时兜底（数据来源单独记录）。
 - **SQLite 存储**：`products`（当前快照）、`price_history`（每日价格点）、
   `crawl_log`（抓取日志）。
 - **礼貌抓取**：请求间隔、指数退避重试、持久化 cookie、
   反爬拦截检测（"Pardon Our Interruption" / Incapsula）。
+- **真实浏览器兜底**：Coles 被拦截时自动使用 Playwright + 本机 Chrome
+  重试，不再依赖 IP 运气。
 - **每日刷新**：按每天一轮设计（见 `docs/DEPLOYMENT.zh-CN.md`）。
 
 ## 快速开始
@@ -46,9 +49,10 @@ python -m ausgrocery probe coles lipton-ice-tea-sugar-free-ice-tea-lemon-iced-te
 ## 行为说明
 
 - **Coles（Imperva/Incapsula）**：同一 IP 连续请求后可能返回
-  "Pardon Our Interruption" 人机挑战。客户端会重试并明确报告，
-  不会静默猜错。稍后重跑、或换一个未被风控的住宅 IP 通常可以恢复
-  （已验证：同一商品页在风控前可正常解析）。
+  "Pardon Our Interruption" 人机挑战。轻量客户端会重试，然后自动降级到
+  Playwright + 本机 Chrome 真实会话（Incapsula 对真实浏览器放行），
+  被风控的 IP 也能工作。需要本机安装 Chrome（Windows 默认有）；
+  设置 `AUSGROCERY_NO_BROWSER=1` 可关闭浏览器兜底。
 - **Woolworths（Akamai）**：对数据中心 IP 的裸 POST 更严格；客户端会先
   GET 一次浏览页预热 cookie（与参考项目一致，本机实测可用）。
 - 价格与商品信息会变化；每条记录都带 `fetched_at`，每次抓取都会向

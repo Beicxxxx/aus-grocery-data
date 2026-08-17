@@ -13,11 +13,13 @@ That endpoint needs an IP that is not flagged by Incapsula.
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any, Iterable
 
 from . import config
-from .http import HttpClient
+from . import browser as browser_fallback
+from .http import HttpClient, HttpError
 
 COLES_BASE = "https://www.coles.com.au"
 
@@ -48,7 +50,7 @@ class Coles:
 
     def update_build_id(self) -> str:
         self._prime()
-        html = self.client.get(f"{COLES_BASE}/browse", headers={"Accept": "text/html"})
+        html = self._fetch_html(f"{COLES_BASE}/browse")
         m = re.search(r',"buildId":"([^"]+)"', html)
         if not m:
             raise RuntimeError("could not extract Coles buildId")
@@ -64,10 +66,12 @@ class Coles:
 
     def list_categories(self) -> list[dict]:
         bid = self.build_id()
-        data = self.client.get_json(
-            f"{COLES_BASE}/_next/data/{bid}/en/browse.json",
-            headers={"Accept": "application/json"},
-        )
+        url = f"{COLES_BASE}/_next/data/{bid}/en/browse.json"
+        try:
+            data = self.client.get_json(url, headers={"Accept": "application/json"})
+        except HttpError:
+            html = self._fetch_html(f"{COLES_BASE}/browse")
+            data = _extract_next_data(html)
         nodes = (
             data.get("pageProps", {})
             .get("allProductCategories", {})
@@ -84,7 +88,11 @@ class Coles:
             f"{COLES_BASE}/_next/data/{bid}/en/browse/{category}.json"
             f"?slug={category}&page={page}"
         )
-        data = self.client.get_json(url, headers={"Accept": "application/json"})
+        try:
+            data = self.client.get_json(url, headers={"Accept": "application/json"})
+        except HttpError:
+            html = self._fetch_html(f"{COLES_BASE}/browse/{category}?page={page}")
+            data = _extract_next_data(html)
         results = (
             data.get("pageProps", {})
             .get("searchResults", {})
@@ -117,7 +125,10 @@ class Coles:
 
     def product(self, slug: str) -> dict:
         self._prime()
-        html = self.client.get(f"{COLES_BASE}/product/{slug}")
+        html = self._fetch_html(f"{COLES_BASE}/product/{slug}")
+        return self.parse_product_html(html)
+
+    def parse_product_html(self, html: str) -> dict:
         m = re.search(
             r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
             html, re.S,
@@ -131,6 +142,15 @@ class Coles:
             if q.get("endpointName") == "GetProductDetails":
                 return q["data"]["product"]
         raise RuntimeError("GetProductDetails not found in __NEXT_DATA__")
+
+    def _fetch_html(self, url: str) -> str:
+        """Lightweight HTTP first; real-browser fallback on bot challenge."""
+        try:
+            return self.client.get(url, headers={"Accept": "text/html"})
+        except HttpError as e:
+            if "bot challenge" in str(e) and not os.environ.get("AUSGROCERY_NO_BROWSER"):
+                return browser_fallback.fetch_html_with_retry(url)
+            raise
 
     # ---- normalize ---------------------------------------------------------
 
@@ -197,6 +217,16 @@ def _as_list(value) -> list[str] | None:
     if isinstance(value, list):
         return [str(x).strip() for x in value if str(x).strip()]
     return [x.strip() for x in str(value).split(",") if x.strip()]
+
+
+def _extract_next_data(html: str) -> dict:
+    m = re.search(
+        r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
+        html, re.S,
+    )
+    if not m:
+        raise RuntimeError("__NEXT_DATA__ not found in page")
+    return json.loads(m.group(1))
 
 
 def _now() -> str:
