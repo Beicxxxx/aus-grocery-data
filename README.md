@@ -4,9 +4,12 @@ Data pipeline for a grocery comparison app (price, ingredients, allergens,
 nutrition, dietary tags) covering Coles and Woolworths, with an optional
 Open Food Facts fallback for missing fields.
 
-The output shape follows the "澳超助手"-style product detail: name, large
-image, both-store prices, ingredients, allergen statement, nutrition table,
-dietary/lifestyle tags, storage and usage instructions, country of origin.
+中文说明见 [README.zh-CN.md](README.zh-CN.md).
+
+The output shape follows a supermarket product-comparison detail view: name,
+large image, both-store prices, ingredients, allergen statement, nutrition
+table, dietary/lifestyle tags, storage and usage instructions, country of
+origin.
 
 ## Features
 

@@ -1,6 +1,6 @@
 # Field mapping
 
-Target shape (the "澳超助手"-style detail view):
+Target shape (supermarket product-comparison detail view):
 
 | Target field | Woolworths | Coles | Open Food Facts (fallback) |
 |---|---|---|---|
