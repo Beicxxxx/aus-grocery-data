@@ -31,6 +31,7 @@ from .coles_queries import GRAPHQL_QUERIES
 from .http import HttpClient, HttpError
 
 COLES_BASE = "https://www.coles.com.au"
+COLES_IMAGE_CDN = "https://cdn.productimages.coles.com.au/productimages"
 WAYBACK_CDX = "https://web.archive.org/cdx/search/cdx"
 WAYBACK_WEB = "https://web.archive.org/web"
 
@@ -472,7 +473,7 @@ class Coles:
         images = p.get("images") or []
         if not images and p.get("imageUris"):
             uri = p["imageUris"][0].get("uri")
-            images = [{"zoom": {"path": uri}}] if uri else []
+            images = [{"zoom": {"path": COLES_IMAGE_CDN + uri}}] if uri else []
         nutrition = p.get("nutrition") or {}
         origin = p.get("countryOfOrigin") or {}
         return {
@@ -485,7 +486,9 @@ class Coles:
             "was_price": pricing.get("was"),
             "unit_price": pricing.get("comparable"),
             "image_url": (
-                f"{COLES_BASE}{images[0]['zoom']['path']}" if images else None
+                images[0]["zoom"]["path"]
+                if images and str(images[0]["zoom"]["path"]).startswith("http")
+                else f"{COLES_BASE}{images[0]['zoom']['path']}" if images else None
             ),
             "url": f"{COLES_BASE}/product/{p.get('id')}",
             "barcode": p.get("gtin"),
