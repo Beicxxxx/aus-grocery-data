@@ -25,8 +25,6 @@ lunchbox、drinks、frozen），通过 BFF API 批量详情（48 个商品/请�
 | 配料 | ~95%+ |
 | 营养信息 | ~95%+ |
 
-## 跨店匹配（Coles 全量 + 当前 WW 数据）
-
 ## Woolworths 食品/饮品全量（2026-08-18）
 
 11 个食品部门全量（fruit-veg、poultry-meat-seafood、deli、
