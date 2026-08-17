@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import http.cookiejar
 from typing import Any, Iterable
 
 from . import config
@@ -32,6 +33,7 @@ class Coles:
         )
         self._build_id: str | None = None
         self._primed = False
+        self._browser: browser_fallback.BrowserSession | None = None
 
     def _prime(self) -> None:
         """Visit a browse page once so Incapsula issues a session cookie
@@ -149,8 +151,48 @@ class Coles:
             return self.client.get(url, headers={"Accept": "text/html"})
         except HttpError as e:
             if "bot challenge" in str(e) and not os.environ.get("AUSGROCERY_NO_BROWSER"):
-                return browser_fallback.fetch_html_with_retry(url)
+                return self._fetch_with_browser(url)
             raise
+
+    def _fetch_with_browser(self, url: str) -> str:
+        if self._browser is None:
+            self._browser = browser_fallback.BrowserSession()
+        try:
+            html, cookies = self._browser.fetch(url)
+        except Exception:
+            # Network may have switched; recreate the session once.
+            self.close_browser()
+            self._browser = browser_fallback.BrowserSession()
+            html, cookies = self._browser.fetch(url)
+        self._apply_browser_cookies(cookies)
+        return html
+
+    def close_browser(self) -> None:
+        if self._browser is not None:
+            try:
+                self._browser.close()
+            finally:
+                self._browser = None
+
+    def _apply_browser_cookies(self, cookies: list[dict]) -> None:
+        """Feed cookies from the real-browser session into the lightweight
+        client so subsequent requests pass without opening a browser."""
+        for c in cookies:
+            domain = c.get("domain") or ""
+            if not domain:
+                continue
+            initial_dot = domain.startswith(".")
+            self.client.cj.set_cookie(http.cookiejar.Cookie(
+                version=0, name=c.get("name"), value=c.get("value"),
+                port=None, port_specified=False,
+                domain=domain.lstrip("."), domain_specified=True,
+                domain_initial_dot=initial_dot,
+                path=c.get("path") or "/", path_specified=True,
+                secure=bool(c.get("secure")),
+                expires=c.get("expires"), discard=not c.get("expires"),
+                comment=None, comment_url=None, rest={}, rfc2109=False,
+            ))
+        self.client._save_cookies()
 
     # ---- normalize ---------------------------------------------------------
 

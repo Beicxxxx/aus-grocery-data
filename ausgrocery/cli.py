@@ -38,9 +38,12 @@ def cmd_probe(args) -> int:
         print("saved:", _save_probe(out, f"woolworths_{pick['Stockcode']}.json"))
     elif args.target == "coles":
         c = Coles()
-        out = c.normalize(c.product(args.slug))
-        print(json.dumps(out, ensure_ascii=False, indent=2))
-        print("saved:", _save_probe(out, f"coles_{args.slug}.json"))
+        try:
+            out = c.normalize(c.product(args.slug))
+            print(json.dumps(out, ensure_ascii=False, indent=2))
+            print("saved:", _save_probe(out, f"coles_{args.slug}.json"))
+        finally:
+            c.close_browser()
     else:
         print("unknown probe target", args.target)
         return 2
@@ -139,15 +142,20 @@ def cmd_coles_crawl(args) -> int:
         log_crawl(db, started, "Coles", args.category, "failed", str(e))
         print(f"crawl failed: {e}", file=sys.stderr)
         return 1
+    finally:
+        c.close_browser()
     return 0
 
 
 def cmd_coles_product(args) -> int:
     db = init_db(args.db)
     c = Coles()
-    row = c.normalize(c.product(args.slug))
-    upsert_product(db, row)
-    print(json.dumps(row, ensure_ascii=False, indent=2))
+    try:
+        row = c.normalize(c.product(args.slug))
+        upsert_product(db, row)
+        print(json.dumps(row, ensure_ascii=False, indent=2))
+    finally:
+        c.close_browser()
     return 0
 
 
