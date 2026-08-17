@@ -154,7 +154,7 @@ class TestMatching(unittest.TestCase):
         conn.commit()
 
     def test_normalize(self):
-        self.assertEqual(normalize_text("Yoghurt Lite!"), "yogurt light")
+        self.assertEqual(normalize_text("Yoghurt Lite!"), "yoghurt lite")
         self.assertEqual(normalize_text("café au lait"), "cafe au lait")
         self.assertIsNone(normalize_barcode(""))
         self.assertEqual(normalize_barcode(" 9300 6355 6150 "), "930063556150")
@@ -175,7 +175,7 @@ class TestMatching(unittest.TestCase):
         self.assertEqual(report["cross_store_groups"], 1)
         self.assertEqual(report["by_method"]["gtin"], 1)
 
-    def test_name_match_different_barcode(self):
+    def test_different_barcode_not_matched(self):
         conn = init_db(":memory:")
         self._seed(conn, [
             ("Woolworths", "1",
@@ -186,10 +186,8 @@ class TestMatching(unittest.TestCase):
              "Sunny Queen", "700g", "2222222222222"),
         ])
         report = rebuild_groups(conn)
-        self.assertEqual(report["cross_store_groups"], 1)
-        # Each side had a different barcode (own GTIN group); the pair was
-        # linked by name, so the merged group is labelled gtin+name.
-        self.assertEqual(report["by_method"].get("gtin+name", 0), 1)
+        self.assertEqual(report["cross_store_groups"], 0)
+        self.assertEqual(report["total_groups"], 2)
 
     def test_different_brand_not_matched(self):
         conn = init_db(":memory:")
@@ -214,7 +212,7 @@ class TestMatching(unittest.TestCase):
         report = rebuild_groups(conn)
         self.assertEqual(report["cross_store_groups"], 0)
 
-    def test_store_brand_comparable(self):
+    def test_store_brand_different_barcode_not_matched(self):
         conn = init_db(":memory:")
         self._seed(conn, [
             ("Woolworths", "1",
@@ -224,7 +222,7 @@ class TestMatching(unittest.TestCase):
              "Coles", "1L", "9300601325900"),
         ])
         report = rebuild_groups(conn)
-        self.assertEqual(report["cross_store_groups"], 1)
+        self.assertEqual(report["cross_store_groups"], 0)
 
     def test_rebuild_is_idempotent(self):
         conn = init_db(":memory:")

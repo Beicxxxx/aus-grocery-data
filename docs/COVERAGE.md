@@ -42,12 +42,11 @@ pantry、international-foods、drinks）：
 
 ## 全量跨店匹配（两家全量后）
 
-24,273 个商品组，其中 **5,904 组跨店可比**（GTIN 精确匹配为主，
-名称/品牌/规格扩展 319 组）。示例（Chobani 全系列均精确匹配）：
+24,718 个商品组，其中 **5,459 组跨店可比**（全部为 GTIN 条码精确匹配，
+不做名称模糊匹配，保证零误配）。示例：
 
 ```text
-Chobani 15G Protein Greek Yogurt Banana Pouch 150g ($2.60)
-  <->  15g High Protein Greek Yogurt Banana Pouch ($3.30)
+Nuttelex Buttery Table Spread 500g  <->  Nuttelex Buttery Spread
 ```
 
 ## Woolworths 试点（3 个品类 × 2 页）

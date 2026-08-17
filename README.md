@@ -26,8 +26,8 @@ origin.
   dietary tags / nutrition (source is recorded separately).
 - SQLite storage: `products` (current snapshot), `price_history`
   (daily price points), `crawl_log`, `product_groups` (cross-store groups).
-- Cross-store matching: GTIN barcodes first, then normalised
-  brand/size/name similarity, so the app can render both stores side by side.
+- Cross-store matching: strict GTIN barcode matching only (no fuzzy name
+  matching, zero mis-pairing), so the app can render both stores side by side.
 - Polite crawling: request delay, retries with backoff, persistent cookie
   jar, bot-challenge detection ("Pardon Our Interruption", Incapsula).
 - Real-browser fallback: automatic Playwright + Chrome kept as a last resort
@@ -51,7 +51,7 @@ python -m ausgrocery coles-product --slug lipton-ice-tea-sugar-free-ice-tea-lemo
 # Coles: one department (multi-page)
 python -m ausgrocery coles-crawl --category dairy-eggs-fridge --max-pages 1
 
-# Cross-store matching: rebuild product groups (GTIN + name similarity)
+# Cross-store matching: rebuild product groups (strict GTIN only)
 python -m ausgrocery match --db data/grocery.db
 
 # Full food & drink crawl (both stores + auto match)

@@ -1,43 +1,48 @@
-# 跨店商品匹配
+# 跨店商品匹配（严格条码）
 
-同一个商品在 Coles 与 Woolworths 的名称、条形码往往不同
-（例如 "Bega Stringers Cheese" vs "Cheese Stringers Original"、
-"12 Extra Large Free Range Eggs" vs "Free Range Extra Large Eggs 12 Pack"）。
-匹配器为前端提供"商品组"：一组 = 两家店里的同一个（或可比的）商品。
+同一个商品在 Coles 与 Woolworths 的名称往往不同（例如
+"Nuttelex Buttery Table Spread" vs "Nuttelex Buttery Spread"），
+名称模糊匹配容易误配外观相似但实际不同的商品（如普通全脂奶 vs
+无乳糖全脂奶）。因此匹配**只使用条形码（EAN/UPC/GTIN）**：
 
-## 匹配流程（三级）
+> 双店条形码完全一致 → 同一商品组；否则各自单店成组。
 
-1. **GTIN（条形码）精确匹配**：双店条形码相同的商品视为同一商品。
-2. **名称匹配**：剩余商品按 品牌 + 规格 + 归一化名称 比较：
-   - 品牌需相同，或双方都是自有品牌（Woolworths / Coles / Coles Simply /
-     Macro 等，视为可比）；
-   - 规格需一致（`1.5L` = `1.5 l`，`300mL x 12 pack` 按原样比较）；
-   - 名称去掉品牌/规格/通用词（bottle、pack、can 等）后，
-     用 SequenceMatcher 相似度打分，默认阈值 0.78；
-   - 同义词归一化：yoghurt→yogurt、lite→light。
-3. **单店组**：没有跨店伙伴的商品自成一组，保证每个商品恰好属于一组。
+## 规则
+
+1. 条形码清洗为纯数字（忽略空格/连字符），接受 8–14 位
+   （EAN-8 / UPC-A / EAN-13 / GTIN-14）；长度不合法的视为无条码。
+2. 相同条码的所有商品（跨店）归入一个 `gtin` 组。
+3. 无条码或条码不跨店的商品各自成 `single` 组。
+4. **不做**品牌、规格、名称相似度匹配——保证零误配。
 
 ## 生成与验证
 
 ```powershell
 python -m ausgrocery match --db data/grocery.db
-python -m ausgrocery match --db data/grocery.db --min-score 0.80  # 更严格
 ```
 
 命令会重建 `product_groups` / `product_group_members` 并打印报告。
-每次全量抓取后可重跑；匹配只依赖当前快照，可随时重建。
+每次全量抓取后重跑即可；匹配只依赖当前快照，可随时重建。
 
-## 试点结果（dairy-eggs-fridge，284 个商品）
+## 全量结果（2026-08-18，两家食品/饮品全量）
 
 | 指标 | 数值 |
 | --- | --- |
-| 商品组总数 | 264 |
-| 跨店匹配组 | 20（GTIN 8 + 名称扩展 12） |
-| 每个商品的组归属 | 恰好 1 个（无孤儿、无重复） |
+| 商品总数 | 30,177（WW 15,944 + Coles 14,233） |
+| 商品组总数 | 24,718 |
+| 跨店匹配组 | 5,459（全部为 GTIN 精确匹配） |
+
+示例（同一商品双店名称不同但条码一致，正确配对）：
+
+```text
+Nuttelex Buttery Table Spread 500g  <->  Nuttelex Buttery Spread
+Sunny Queen 12 Extra Large Free Range Eggs 700g
+  <->  Sunny Queen Free Range Extra Large Eggs 12 Pack
+```
 
 ## 已知边界
 
-- 名称相似度低于阈值的同款（如 "Cheese Slices Tasty 24 Pack" 与
-  "Tasty Cheese Slices"）可能漏配；提高阈值更保守、降低阈值更激进。
-- 自有品牌跨店配对（Woolworths 与 Coles 自家牛奶）在方法上视为"可比"，
-  应用层仍应显示各自品牌，避免误导。
+- 双店条码不同但实际相同的商品不会配对（保守策略，宁缺勿错）；
+- 缺失/无效条码的商品不会参与跨店匹配；
+- 若某商品双店条码相同但并非同一商品（极罕见，条码本身唯一标识
+  EAN-13 商品规格），请以商品实物为准核对。

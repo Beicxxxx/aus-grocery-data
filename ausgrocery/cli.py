@@ -150,7 +150,7 @@ FOOD_EXCLUDE = {
     # Coles
     "cleaning-laundry", "health-beauty", "baby", "pet", "home-garden",
     "tobacco", "liquorland", "bonus-entry-products", "down-down",
-    # Woolworths (best-effort; matched by name fallback below)
+    # Woolworths (best-effort)
     "household", "health-wellness", "personal-care", "baby", "pet",
     "liquor", "tobacco", "back-to-school", "garden", "home",
 }
@@ -242,7 +242,7 @@ def cmd_food_all(args) -> int:
 
     # ---- match -------------------------------------------------------------
     if not args.no_match:
-        report = rebuild_groups(db, min_score=args.min_score)
+        report = rebuild_groups(db)
         print(f"match: {report['cross_store_groups']} cross-store groups "
               f"(of {report['total_groups']})")
     return 0
@@ -305,7 +305,7 @@ def cmd_backfill_off(args) -> int:
 
 def cmd_match(args) -> int:
     db = init_db(args.db)
-    report = rebuild_groups(db, min_score=args.min_score)
+    report = rebuild_groups(db)
     print("== 跨店商品匹配报告 ==")
     print(f"商品组总数: {report['total_groups']}")
     print(f"跨店匹配组: {report['cross_store_groups']}")
@@ -360,9 +360,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_backfill_off)
 
     sp = sub.add_parser("match", parents=[common],
-                        help="rebuild cross-store product groups (GTIN + name)")
-    sp.add_argument("--min-score", type=float, default=0.78,
-                    help="name similarity threshold (default 0.78)")
+                        help="rebuild cross-store product groups (GTIN only)")
     sp.set_defaults(func=cmd_match)
 
     sp = sub.add_parser("food-all", parents=[common],
@@ -371,8 +369,6 @@ def build_parser() -> argparse.ArgumentParser:
                     help="which store(s) to crawl (default both)")
     sp.add_argument("--no-match", action="store_true",
                     help="skip the cross-store matching step")
-    sp.add_argument("--min-score", type=float, default=0.78,
-                    help="name similarity threshold (default 0.78)")
     sp.set_defaults(func=cmd_food_all)
     return p
 
