@@ -125,15 +125,12 @@ def cmd_coles_crawl(args) -> int:
     count = 0
     try:
         for page_products in c.crawl_category_all(args.category, args.max_pages):
-            for tile in page_products:
-                # Category tiles carry an id but no url; GraphQL only needs the id.
-                slug = str(tile.get("id") or "")
-                if not slug:
-                    continue
+            ids = [str(t.get("id")) for t in page_products if t.get("id")]
+            for p in c.batch_products(ids):
                 try:
-                    row = c.normalize(c.product(slug))
-                except HttpError as e:
-                    print(f"  detail failed {slug}: {e}", file=sys.stderr)
+                    row = c.normalize(p)
+                except Exception as e:
+                    print(f"  normalize failed {p.get('id')}: {e}", file=sys.stderr)
                     continue
                 upsert_product(db, row)
                 count += 1
@@ -146,6 +143,106 @@ def cmd_coles_crawl(args) -> int:
         return 1
     finally:
         c.close_browser()
+    return 0
+
+
+FOOD_EXCLUDE = {
+    # Coles
+    "cleaning-laundry", "health-beauty", "baby", "pet", "home-garden",
+    "tobacco", "liquorland", "bonus-entry-products", "down-down",
+    # Woolworths (best-effort; matched by name fallback below)
+    "household", "health-wellness", "personal-care", "baby", "pet",
+    "liquor", "tobacco", "back-to-school", "garden", "home",
+}
+
+
+def _is_food(cat: dict) -> bool:
+    text = f"{cat.get('name', '')} {cat.get('url', '')}".lower()
+    if any(k in text for k in FOOD_EXCLUDE):
+        return False
+    food_markers = (
+        "fruit", "veget", "meat", "seafood", "dairy", "egg", "fridge",
+        "bakery", "deli", "pantry", "drink", "frozen", "chip", "snack",
+        "health food", "wellness", "lunch", "world food", "dietary",
+        "chocolate", "confectionery", "biscuit", "breakfast", "coffee",
+        "tea", "sauce", "pasta", "rice", "cooking", "baby food",
+    )
+    return any(k in text for k in food_markers)
+
+
+def cmd_food_all(args) -> int:
+    """Crawl all food & drink departments at both stores, then match."""
+    db = init_db(args.db)
+    started = now()
+    total = {"Woolworths": 0, "Coles": 0}
+
+    # ---- Woolworths --------------------------------------------------------
+    ww = Woolworths()
+    try:
+        cats = ww.list_categories()
+    except Exception as e:
+        print(f"Woolworths category discovery failed: {e}", file=sys.stderr)
+        cats = [{"id": c["id"], "name": c["name"], "url": c["url"]}
+                for c in config.EXAMPLE_DEPARTMENTS]
+    ww_cats = [c for c in cats if _is_food(c)]
+    print(f"Woolworths food departments: {[c.get('url') or c.get('name') for c in ww_cats]}")
+    for cat in ww_cats:
+        url_path = cat.get("url") or cat.get("id")
+        scope = f"{cat.get('id')}:{url_path}"
+        try:
+            for page_products in ww.crawl_category_all(cat["id"], url_path):
+                for p in page_products:
+                    try:
+                        row = ww.normalize(p)
+                        if not row.get("price"):
+                            continue
+                        upsert_product(db, row)
+                        total["Woolworths"] += 1
+                    except Exception as e:
+                        print(f"  skip {cat.get('name')}: {e}", file=sys.stderr)
+                print(f"  WW {cat.get('name')}: cumulative {total['Woolworths']}")
+        except HttpError as e:
+            log_crawl(db, started, "Woolworths", scope, "failed", str(e))
+            print(f"  WW department failed {cat.get('name')}: {e}", file=sys.stderr)
+
+    # ---- Coles -------------------------------------------------------------
+    c = Coles()
+    try:
+        co_cats = [x for x in c.list_categories() if _is_food(x)]
+    except Exception as e:
+        print(f"Coles category discovery failed: {e}", file=sys.stderr)
+        co_cats = [{"id": x, "name": x, "url": x} for x in config.COLES_EXAMPLE_CATEGORIES]
+    print(f"Coles food departments: {[x.get('id') for x in co_cats]}")
+    for cat in co_cats:
+        slug = cat.get("id") or cat.get("url")
+        scope = slug
+        try:
+            for page_products in c.crawl_category_all(slug):
+                ids = [str(t.get("id")) for t in page_products if t.get("id")]
+                for p in c.batch_products(ids):
+                    try:
+                        row = c.normalize(p)
+                        upsert_product(db, row)
+                        total["Coles"] += 1
+                    except Exception as e:
+                        print(f"  skip {cat.get('name')}: {e}", file=sys.stderr)
+                print(f"  Coles {cat.get('name')}: cumulative {total['Coles']}")
+        except HttpError as e:
+            log_crawl(db, started, "Coles", scope, "failed", str(e))
+            print(f"  Coles department failed {cat.get('name')}: {e}", file=sys.stderr)
+        finally:
+            c.close_browser()
+
+    log_crawl(db, started, "both", "food-all",
+              "ok" if any(total.values()) else "failed",
+              f"WW={total['Woolworths']} Coles={total['Coles']}")
+    print(f"done: Woolworths={total['Woolworths']} Coles={total['Coles']}")
+
+    # ---- match -------------------------------------------------------------
+    if not args.no_match:
+        report = rebuild_groups(db, min_score=args.min_score)
+        print(f"match: {report['cross_store_groups']} cross-store groups "
+              f"(of {report['total_groups']})")
     return 0
 
 
@@ -265,6 +362,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--min-score", type=float, default=0.78,
                     help="name similarity threshold (default 0.78)")
     sp.set_defaults(func=cmd_match)
+
+    sp = sub.add_parser("food-all", parents=[common],
+                        help="crawl all food & drink departments at both stores")
+    sp.add_argument("--no-match", action="store_true",
+                    help="skip the cross-store matching step")
+    sp.add_argument("--min-score", type=float, default=0.78,
+                    help="name similarity threshold (default 0.78)")
+    sp.set_defaults(func=cmd_food_all)
     return p
 
 

@@ -34,6 +34,36 @@ COLES_BASE = "https://www.coles.com.au"
 WAYBACK_CDX = "https://web.archive.org/cdx/search/cdx"
 WAYBACK_WEB = "https://web.archive.org/web"
 
+# Sparse detail fields used for batch product lookups. Kept well below the
+# GraphQL complexity limit so many products fit into a single request
+# (verified: 48 products per request works reliably).
+BATCH_FIELD = """
+  p{i}: product(storeId: $storeId, productId: "{pid}", shoppingMethod: $shoppingMethod, useV2NipAndAllergens: $useV2NipAndAllergens) {
+    id
+    name
+    brand
+    description
+    size
+    gtin
+    lifestyle
+    imageUris { uri }
+    pricing { now was comparable }
+    additionalInfo { title description }
+    nutrition {
+      servingsPerPackage
+      servingSize
+      breakdown { title nutrients { nutrient value } }
+    }
+    countryOfOrigin { country }
+  }
+"""
+
+BATCH_QUERY = (
+    "query BatchDetails($storeId: BrandedId!, $shoppingMethod: ShoppingMethod, "
+    "$useV2NipAndAllergens: Boolean) {\n{fields}\n}"
+)
+COLES_BATCH_SIZE = 48
+
 
 def extract_product_id(slug: str) -> str | None:
     """Pull the trailing numeric id from a Coles product slug.
@@ -329,6 +359,44 @@ class Coles:
         html = self._fetch_html(f"{COLES_BASE}/product/{slug}")
         return self.parse_product_html(html)
 
+    def batch_products(self, product_ids: Iterable[str | int]) -> list[dict]:
+        """Fetch many product details in one GraphQL request per batch.
+
+        Returns products in the same shape as ``product()`` (id, name, brand,
+        size, gtin, lifestyle, imageUris, pricing, additionalInfo, nutrition,
+        countryOfOrigin). Invalid ids are skipped.
+        """
+        ids = [str(x) for x in product_ids]
+        out: list[dict] = []
+        for i in range(0, len(ids), COLES_BATCH_SIZE):
+            chunk = ids[i:i + COLES_BATCH_SIZE]
+            fields = "\n".join(
+                BATCH_FIELD.replace("{i}", str(j)).replace("{pid}", pid)
+                for j, pid in enumerate(chunk)
+            )
+            payload = {
+                "query": BATCH_QUERY.replace("{fields}", fields),
+                "variables": {
+                    "storeId": self.store_id,
+                    "shoppingMethod": self.shopping_method,
+                    "useV2NipAndAllergens": True,
+                },
+                "operationName": "BatchDetails",
+            }
+            try:
+                data = self.client.post_json(
+                    config.COLES_GRAPHQL_URL,
+                    payload,
+                    headers=self._headers({"Accept": "application/json"}),
+                    no_cookies=True,
+                )
+            except HttpError:
+                continue
+            for k, v in (data.get("data") or {}).items():
+                if v:
+                    out.append(v)
+        return out
+
     def parse_product_html(self, html: str) -> dict:
         m = re.search(
             r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
@@ -402,6 +470,9 @@ class Coles:
         info = {x.get("title"): x.get("description") for x in p.get("additionalInfo", [])}
         pricing = p.get("pricing") or {}
         images = p.get("images") or []
+        if not images and p.get("imageUris"):
+            uri = p["imageUris"][0].get("uri")
+            images = [{"zoom": {"path": uri}}] if uri else []
         nutrition = p.get("nutrition") or {}
         origin = p.get("countryOfOrigin") or {}
         return {

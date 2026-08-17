@@ -49,6 +49,7 @@ class Woolworths:
 
     def list_categories(self) -> list[dict]:
         """Best-effort department discovery via PiesCategoriesWithSpecials."""
+        self._prime_cookies("browse")
         data = self.client.get_json(
             f"{WW_BASE}/apis/ui/PiesCategoriesWithSpecials",
             headers={"Referer": f"{WW_BASE}/shop/browse"},
