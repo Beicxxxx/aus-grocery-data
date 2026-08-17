@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Generate a self-contained HTML preview of cross-store product groups.
+"""Generate a self-contained HTML preview from the merged product table.
 
 Usage:
     python scripts/preview.py --db data/grocery.db --out data/preview.html [--limit 400]
 
-Reads ``product_groups``/``product_group_members`` from the SQLite database
-and renders one comparison card per cross-store group (both stores side by
-side: image, name, price, dietary tags, allergens, ingredients, nutrition).
+Reads ``merged_products`` (union of Woolworths + Coles + Open Food Facts)
+and renders one comparison card per merged product: selected image, both
+store names/prices, dietary tags, allergens, ingredients, nutrition.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-
 
 STORE_STYLE = {
     "Woolworths": ("#00A650", "#E6F7EC"),
@@ -65,55 +64,51 @@ def canonical_nutrient(name: str) -> str:
     return str(name)
 
 
-def load_nutrition(row: dict) -> dict:
-    """Return {canonical_label: {"100g": str, "serve": str}}."""
-    raw = row.get("nutrition_json")
-    if not raw:
+def parse_merged_nutrition(value) -> dict:
+    """Parse the merged nutrition_json ({"sources": {store: table}}).
+
+    Returns {canonical_label: {"100g": str, "serve": str}} where the value is
+    the first non-empty across Woolworths / Coles / Open Food Facts.
+    """
+    if not value:
         return {}
     try:
-        data = json.loads(raw)
+        data = json.loads(value)
     except ValueError:
         return {}
-    nutrients = data.get("nutrients") or {}
-    out = {}
-    for name, v in nutrients.items():
-        label = canonical_nutrient(name)
-        out.setdefault(label, {})
-        if isinstance(v, dict):
-            if "per_100g" in v:
-                out[label]["100g"] = v["per_100g"]
-            if "per_serve" in v:
-                out[label]["serve"] = v["per_serve"]
-            if "Serve" in v:
-                out[label]["serve"] = v["Serve"]
-            if "100g" in v:
-                out[label]["100g"] = v["100g"]
-    return out
+    sources = data.get("sources") or {}
+    merged: dict = {}
+    for label, table in sources.items():
+        nutrients = {}
+        if isinstance(table, dict) and "nutrients" in table:
+            nutrients = table.get("nutrients") or {}
+        elif isinstance(table, dict):
+            nutrients = table  # OFF nutriments are flat
+        for name, v in nutrients.items():
+            key = canonical_nutrient(name)
+            merged.setdefault(key, {})
+            if isinstance(v, dict):
+                merged[key].setdefault("100g", v.get("per_100g") or v.get("100g"))
+                merged[key].setdefault("serve", v.get("per_serve") or v.get("Serve"))
+            elif label == "OpenFoodFacts":
+                merged[key].setdefault("100g", v)
+    return {k: v for k, v in merged.items() if v.get("100g") or v.get("serve")}
 
 
-def nutrition_rows(ww: dict, co: dict) -> list[dict]:
-    w = load_nutrition(ww)
-    c = load_nutrition(co)
-    labels: list[str] = []
-    for d in (w, c):
-        for k in d:
-            if k not in labels:
-                labels.append(k)
+def nutrition_rows(nutrition: dict) -> list[dict]:
     order = [
         "Energy (kJ)", "Energy (Cal)", "Protein", "Fat (Total)",
         "Fat (Saturated)", "Carbohydrate", "Sugars", "Sodium", "Calcium",
     ]
-    labels.sort(key=lambda k: (order.index(k) if k in order else 99, k))
-    rows = []
-    for label in labels:
-        rows.append({
-            "label": label,
-            "ww100": w.get(label, {}).get("100g"),
-            "co100": c.get(label, {}).get("100g"),
-            "wwserve": w.get(label, {}).get("serve"),
-            "coserve": c.get(label, {}).get("serve"),
-        })
-    return rows
+    labels = sorted(
+        nutrition,
+        key=lambda k: (order.index(k) if k in order else 99, k),
+    )
+    return [
+        {"label": label, "100g": nutrition[label].get("100g"),
+         "serve": nutrition[label].get("serve")}
+        for label in labels
+    ]
 
 
 def price_highlight(ww_cents, co_cents) -> tuple[bool, bool]:
@@ -122,88 +117,96 @@ def price_highlight(ww_cents, co_cents) -> tuple[bool, bool]:
     return ww_cents < co_cents, co_cents < ww_cents
 
 
-def card(group_id: int, ww: dict, co: dict, method: str) -> str:
-    ww_cheap, co_cheap = price_highlight(ww["price_cents"], co["price_cents"])
-    ww_nut = load_nutrition(ww)
-    co_nut = load_nutrition(co)
-    nut_rows = nutrition_rows(ww, co)
+def card(m: dict) -> str:
+    ww_cheap, co_cheap = price_highlight(m.get("price_ww_cents"),
+                                          m.get("price_coles_cents"))
+    nut = parse_merged_nutrition(m.get("nutrition_json"))
+    nut_rows = nutrition_rows(nut)
+    dietary = split_list(m.get("dietary"))
+    allergens = split_list(m.get("allergen_claims")) or split_list(m.get("allergens"))
+    tags = "".join(f'<span class="tag">{esc(t)}</span>' for t in dietary[:10])
+    allergen_chips = []
+    for a in allergens[:10]:
+        cls = "allergen-free" if "free" in a.lower() else "allergen-contains"
+        allergen_chips.append(f'<span class="tag {cls}">{esc(a)}</span>')
 
-    def store_panel(store: str, p: dict, cheaper: bool) -> str:
-        color, bg = STORE_STYLE[store]
-        dietary = split_list(p.get("dietary"))
-        allergens = split_list(p.get("allergen_claims")) or split_list(p.get("allergens"))
-        tags = "".join(
-            f'<span class="tag">{esc(t)}</span>' for t in dietary[:8]
-        )
-        allergen_chips = []
-        for a in allergens[:8]:
-            cls = "allergen-free" if "free" in a.lower() else "allergen-contains"
-            allergen_chips.append(f'<span class="tag {cls}">{esc(a)}</span>')
-        price_extra = (
-            '<span class="cheaper">更便宜</span>' if cheaper else ""
-        )
-        info_lines = []
-        if p.get("storage"):
-            info_lines.append(f"储存：{esc(p['storage'])}")
-        if p.get("usage"):
-            info_lines.append(f"用法：{esc(p['usage'])}")
-        if p.get("origin"):
-            info_lines.append(f"原产：{esc(p['origin'])}")
-        info_html = "".join(f'<p class="meta">{x}</p>' for x in info_lines)
-        img = p.get("image_url")
-        img_html = (
-            f'<img src="{esc(img)}" alt="{esc(p.get("name"))}" '
-            'loading="lazy" onerror="this.parentNode.classList.add(\'noimg\')">'
-            if img else '<div class="no-image">无图</div>'
-        )
+    # Price strip: both stores side by side.
+    def price_cell(label: str, cents, unit, cheaper: bool) -> str:
         return f"""
-        <div class="panel" style="--accent:{color};--accent-bg:{bg}">
-          <div class="store-badge" style="background:{color}">{store}</div>
-          <div class="image-wrap">{img_html}</div>
-          <h3>{esc(p.get('name'))}</h3>
-          <p class="brand">{esc(p.get('brand'))}{' · ' + esc(p.get('size')) if p.get('size') else ''}</p>
-          <p class="price">{money(p.get('price_cents'))}{price_extra}</p>
-          {f'<p class="unit">{esc(p.get("unit_price"))}</p>' if p.get('unit_price') else ''}
-          <p class="barcode">条码 {esc(p.get('barcode'))}</p>
-          <div class="tags">{tags}</div>
-          <div class="allergens">{''.join(allergen_chips)}</div>
-          <details class="ingredients">
-            <summary>配料</summary>
-            <p>{esc(p.get('ingredients')) or '未提供'}</p>
-          </details>
-          {info_html}
+        <div class="price-cell">
+          <span class="price-store">{esc(label)}</span>
+          <span class="price-value">{money(cents)}</span>
+          {f'<span class="price-unit">{esc(unit)}</span>' if unit else ''}
+          {'<span class="cheaper">更便宜</span>' if cheaper else ''}
         </div>
         """
+    prices = f"""
+    <div class="prices">
+      {price_cell('Woolworths', m.get('price_ww_cents'), m.get('unit_price_ww'), ww_cheap)}
+      {price_cell('Coles', m.get('price_coles_cents'), m.get('unit_price_coles'), co_cheap)}
+    </div>
+    """
+
+    info_rows = []
+    if m.get("storage"):
+        info_rows.append(f"<tr><th>储存</th><td>{esc(m['storage'])}</td></tr>")
+    if m.get("usage"):
+        info_rows.append(f"<tr><th>用法</th><td>{esc(m['usage'])}</td></tr>")
+    if m.get("origin"):
+        info_rows.append(f"<tr><th>原产国</th><td>{esc(m['origin'])}</td></tr>")
+    info_html = (
+        f"<table class='info'>{''.join(info_rows)}</table>" if info_rows else ""
+    )
 
     nut_html = ""
     if nut_rows:
         rows = "".join(
             f"<tr><td>{esc(r['label'])}</td>"
-            f"<td>{esc(r['ww100']) or '—'}</td><td>{esc(r['co100']) or '—'}</td>"
-            f"<td>{esc(r['wwserve']) or '—'}</td><td>{esc(r['coserve']) or '—'}</td></tr>"
+            f"<td>{esc(r['100g']) or '—'}</td>"
+            f"<td>{esc(r['serve']) or '—'}</td></tr>"
             for r in nut_rows
         )
         nut_html = f"""
         <details class="nutrition" open>
-          <summary>营养信息（每 100g / 每份）</summary>
+          <summary>营养信息（合并三家来源 · 每 100g / 每份）</summary>
           <table>
-            <thead><tr><th>营养</th><th>WW 100g</th><th>Coles 100g</th>
-            <th>WW 每份</th><th>Coles 每份</th></tr></thead>
+            <thead><tr><th>营养</th><th>每 100g</th><th>每份</th></tr></thead>
             <tbody>{rows}</tbody>
           </table>
         </details>
         """
 
+    img = m.get("image_url")
+    img_html = (
+        f'<img src="{esc(img)}" alt="{esc(m.get("name_ww") or m.get("name_coles"))}" '
+        'loading="lazy" onerror="this.parentNode.classList.add(\'noimg\')">'
+        if img else '<div class="no-image">无图</div>'
+    )
+    name = m.get("name_ww") or m.get("name_coles") or ""
+    brand = m.get("brand") or ""
+    size = m.get("size_ww") or m.get("size_coles") or ""
+
     return f"""
-    <article class="card" data-search="{esc((ww.get('name') or '') + ' ' + (co.get('name') or '')).lower()}">
+    <article class="card" data-search="{esc(name).lower()}">
       <div class="card-head">
-        <span class="method">匹配方式：{esc(method)}</span>
-        <span class="group-id">组 #{group_id}</span>
+        <span>条码 {esc(m.get('barcode'))}</span>
+        <span class="sources">图片来源：{esc(m.get('image_source') or '—')}</span>
       </div>
-      <div class="columns">
-        {store_panel('Woolworths', ww, ww_cheap)}
-        {store_panel('Coles', co, co_cheap)}
+      <div class="merged">
+        <div class="image-wrap">{img_html}</div>
+        <div class="merged-main">
+          <h3>{esc(name)}</h3>
+          <p class="brand">{esc(brand)}{' · ' + esc(size) if size else ''}</p>
+          {prices}
+          <div class="tags">{tags}</div>
+          <div class="allergens">{''.join(allergen_chips)}</div>
+        </div>
       </div>
+      <details class="ingredients">
+        <summary>配料</summary>
+        <p>{esc(m.get('ingredients')) or '未提供'}</p>
+      </details>
+      {info_html}
       {nut_html}
     </article>
     """
@@ -242,22 +245,25 @@ main {{ padding:20px 32px 60px; max-width:1280px; margin:0 auto; }}
   padding:18px; margin-bottom:22px; box-shadow:0 1px 3px rgba(0,0,0,.05); }}
 .card-head {{ display:flex; justify-content:space-between; margin-bottom:10px;
   font-size:12px; color:var(--muted); }}
-.columns {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }}
-@media (max-width:820px) {{ .columns {{ grid-template-columns:1fr; }} }}
-.panel {{ border:1px solid var(--line); border-radius:12px; padding:14px; position:relative; }}
-.store-badge {{ position:absolute; top:-10px; left:14px; color:#fff; font-size:11px;
-  font-weight:700; padding:3px 12px; border-radius:999px; }}
+.merged {{ display:grid; grid-template-columns:220px 1fr; gap:18px; }}
+@media (max-width:760px) {{ .merged {{ grid-template-columns:1fr; }} }}
 .image-wrap {{ height:170px; display:flex; align-items:center; justify-content:center;
   background:#fafafa; border-radius:10px; overflow:hidden; margin:8px 0 10px; }}
 .image-wrap img {{ max-height:100%; max-width:100%; object-fit:contain; }}
 .image-wrap.noimg {{ background:repeating-linear-gradient(45deg,#f4f4f4,#f4f4f4 8px,#ececec 8px,#ececec 16px); }}
 .no-image {{ color:#aaa; font-size:13px; }}
-.panel h3 {{ margin:6px 0 2px; font-size:15px; line-height:1.35; }}
+.merged-main h3 {{ margin:4px 0 2px; font-size:17px; line-height:1.35; }}
 .brand {{ margin:2px 0; color:var(--muted); font-size:12px; }}
-.price {{ margin:8px 0 2px; font-size:26px; font-weight:800; color:var(--accent); }}
-.cheaper {{ font-size:12px; font-weight:700; color:#fff; background:#2e9e44;
-  padding:2px 8px; border-radius:999px; margin-left:8px; vertical-align:middle; }}
-.unit {{ margin:0; color:var(--muted); font-size:12px; }}
+.prices {{ display:flex; gap:10px; margin:10px 0 8px; flex-wrap:wrap; }}
+.price-cell {{ border:1px solid var(--line); border-radius:10px; padding:8px 14px;
+  min-width:150px; background:#fbfbfb; }}
+.price-store {{ display:block; font-size:11px; color:var(--muted); font-weight:700; }}
+.price-value {{ font-size:22px; font-weight:800; }}
+.price-cell:first-child .price-value {{ color:#00A650; }}
+.price-cell:last-child .price-value {{ color:#E31B23; }}
+.price-unit {{ font-size:11px; color:var(--muted); display:block; }}
+.cheaper {{ font-size:11px; font-weight:700; color:#fff; background:#2e9e44;
+  padding:2px 8px; border-radius:999px; margin-top:4px; display:inline-block; }}
 .barcode {{ margin:4px 0 0; color:#aaa; font-size:11px; }}
 .tags {{ margin-top:8px; display:flex; flex-wrap:wrap; gap:5px; }}
 .tag {{ font-size:11px; background:#eef2ff; color:#3b4a8f; border-radius:999px;
@@ -269,6 +275,13 @@ main {{ padding:20px 32px 60px; max-width:1280px; margin:0 auto; }}
 .ingredients summary {{ cursor:pointer; color:var(--accent); font-weight:600; }}
 .ingredients p {{ margin:6px 0 0; color:#444; line-height:1.5; }}
 .meta {{ margin:6px 0 0; font-size:12px; color:#666; }}
+.sources {{ display:inline-flex; gap:5px; }}
+.source {{ font-size:10px; font-weight:700; color:#fff; padding:2px 8px;
+  border-radius:999px; }}
+.info {{ border-collapse:collapse; margin-top:10px; font-size:12px; }}
+.info th {{ text-align:left; color:var(--muted); font-weight:600; width:70px;
+  padding:3px 10px 3px 0; }}
+.info td {{ padding:3px 0; color:#444; }}
 .nutrition {{ margin-top:14px; border-top:1px dashed var(--line); padding-top:10px; }}
 .nutrition summary {{ cursor:pointer; font-weight:700; font-size:13px; color:var(--ink); }}
 .nutrition table {{ width:100%; border-collapse:collapse; margin-top:8px; font-size:12px; }}
@@ -327,56 +340,17 @@ def main() -> int:
     args = ap.parse_args()
 
     conn = sqlite3.connect(args.db)
-    groups = conn.execute(
-        """
-        SELECT g.group_id, g.method,
-               w.product_id, w.name, w.brand, w.size, w.price_cents,
-               w.unit_price, w.image_url, w.barcode, w.ingredients,
-               w.dietary, w.allergen_claims, w.allergens, w.nutrition_json,
-               w.storage, w.usage, w.origin,
-               c.product_id, c.name, c.brand, c.size, c.price_cents,
-               c.unit_price, c.image_url, c.barcode, c.ingredients,
-               c.dietary, c.allergen_claims, c.allergens, c.nutrition_json,
-               c.storage, c.usage, c.origin
-        FROM product_groups g
-        JOIN product_group_members mw
-          ON mw.group_id = g.group_id AND mw.store = 'Woolworths'
-        JOIN product_group_members mc
-          ON mc.group_id = g.group_id AND mc.store = 'Coles'
-        JOIN products w ON w.store = mw.store AND w.product_id = mw.product_id
-        JOIN products c ON c.store = mc.store AND c.product_id = mc.product_id
-        ORDER BY g.group_id
-        """
-    ).fetchall()
-    total_cross = len(groups)
+    cols = [c[0] for c in conn.execute("SELECT * FROM merged_products LIMIT 0").description]
+    rows = conn.execute("SELECT * FROM merged_products ORDER BY group_id").fetchall()
+    total_cross = len(rows)
     total_products = conn.execute("SELECT COUNT(*) FROM products").fetchone()[0]
 
-    cols = [
-        "group_id", "method",
-        "ww_product_id", "ww_name", "ww_brand", "ww_size", "ww_price_cents",
-        "ww_unit_price", "ww_image_url", "ww_barcode", "ww_ingredients", "ww_dietary",
-        "ww_allergen_claims", "ww_allergens", "ww_nutrition_json",
-        "ww_storage", "ww_usage", "ww_origin",
-        "co_product_id", "co_name", "co_brand", "co_size", "co_price_cents",
-        "co_unit_price", "co_image_url", "co_barcode", "co_ingredients", "co_dietary",
-        "co_allergen_claims", "co_allergens", "co_nutrition_json",
-        "co_storage", "co_usage", "co_origin",
-    ]
-
-    def product_dict(row: tuple, prefix: str) -> dict:
-        p = {}
-        for i, col in enumerate(cols):
-            if col.startswith(prefix):
-                p[col[len(prefix):]] = row[i]
-        return p
-
     rendered = []
-    for row in groups:
-        ww = product_dict(row, "ww_")
-        co = product_dict(row, "co_")
+    for row in rows:
+        m = dict(zip(cols, row))
         rendered.append({
-            "html": card(row[0], ww, co, row[1]),
-            "name": (ww.get("name") or "") + " " + (co.get("name") or ""),
+            "html": card(m),
+            "name": (m.get("name_ww") or "") + " " + (m.get("name_coles") or ""),
         })
 
     if args.limit and len(rendered) > args.limit:

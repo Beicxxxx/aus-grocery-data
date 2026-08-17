@@ -18,9 +18,13 @@ Open Food Facts 补齐缺失字段。输出字段对应商品详情页的常见�
 - **Open Food Facts**：按条形码查询，仅在超市缺失过敏原/膳食标签/
   营养信息时兜底（数据来源单独记录）。
 - **SQLite 存储**：`products`（当前快照）、`price_history`（每日价格点）、
-  `crawl_log`（抓取日志）、`product_groups`（跨店商品组）。
+  `crawl_log`（抓取日志）、`product_groups`（跨店商品组）、
+  `merged_products`（三源并集合并详情）。
 - **跨店匹配**：严格按 GTIN 条形码匹配（不做名称模糊匹配，零误配），
   生成商品组，供前端并排展示双店价格与成分。
+- **三源合并**：商品详情 = WW + Coles + Open Food Facts 字段并集；
+  图片多选一（OFF 正视图高清优先 → WW → Coles），
+  预览脚本直接消费合并表。
 - **礼貌抓取**：请求间隔、指数退避重试、持久化 cookie、
   反爬拦截检测（"Pardon Our Interruption" / Incapsula）。
 - **免费稳定**：Coles 走公开 BFF API，无需住宅代理、无需频繁更换 IP。
@@ -47,6 +51,12 @@ python -m ausgrocery match --db data/grocery.db
 
 # 全食品/饮品全量抓取（两家 + 自动跨店匹配）
 python -m ausgrocery food-all --db data/grocery.db
+
+# 生成三源合并详情表
+python -m ausgrocery merge --db data/grocery.db
+
+# 生成合并表预览
+python scripts/preview.py --db data/grocery.db --out data/preview.html
 
 # Open Food Facts：按条形码查询
 python -m ausgrocery off --barcode 9300633556150

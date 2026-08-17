@@ -15,6 +15,7 @@ from ausgrocery.matching import (
     normalize_text,
     rebuild_groups,
 )
+from ausgrocery.merge import build_merged, pick_image
 from ausgrocery.storage import init_db, upsert_product
 from ausgrocery.woolworths import Woolworths, parse_ww_nutrition
 
@@ -240,6 +241,124 @@ class TestMatching(unittest.TestCase):
             "SELECT COUNT(*) FROM product_group_members"
         ).fetchone()[0]
         self.assertEqual(rows, 2)
+
+
+class TestMerge(unittest.TestCase):
+    def _seed_pair(self, conn, barcode="9310264910009"):
+        # Two products with the same barcode, plus one with OFF fallback data.
+        conn.execute(
+            "INSERT INTO products (store, product_id, name, brand, size, "
+            "price_cents, unit_price, image_url, barcode, ingredients, "
+            "allergen_claims, dietary, storage, origin, nutrition_json)"
+            " VALUES ('Woolworths','1','Bega Stringers Cheese','Bega','160g',"
+            " 600, '$3.75/ 100g', 'https://cdn0.woolworths.media/x.jpg', ?,"
+            " 'Milk, Salt', 'Gluten Free,Egg Free', 'Vegetarian', "
+            " 'Keep refrigerated', 'Australia',"
+            " '{\"nutrients\":{\"Energy\":{\"100g\":\"1200 kJ\"}}}')",
+            (barcode,),
+        )
+        conn.execute(
+            "INSERT INTO products (store, product_id, name, brand, size, "
+            "price_cents, unit_price, image_url, barcode, ingredients, "
+            "allergen_claims, dietary, storage, origin)"
+            " VALUES ('Coles','2','Cheese Stringers Original 8 Pack','Bega','160g',"
+            " 750, '$4.69/ 100g', 'https://www.coles.com.au/8/123.jpg', ?,"
+            " NULL, 'Contains Milk', NULL, NULL, NULL)",
+            (barcode,),
+        )
+        conn.execute(
+            "INSERT INTO product_groups (group_id, match_key, method, created_at)"
+            " VALUES (1, ?, 'gtin', '2026-01-01T00:00:00+00:00')",
+            (f"gtin:{barcode}",),
+        )
+        conn.execute(
+            "INSERT INTO product_group_members (group_id, store, product_id)"
+            " VALUES (1,'Woolworths','1'), (1,'Coles','2')"
+        )
+        conn.commit()
+
+    def test_union_fields(self):
+        conn = init_db(":memory:")
+        self._seed_pair(conn)
+        # Attach OFF data to the WW row.
+        conn.execute(
+            "UPDATE products SET off_json=? WHERE store='Woolworths' AND product_id='1'",
+            (
+                '{"name":"Bega Stringers","image_url":"https://images.openfoodfacts.org/'
+                'front_en.1.full.jpg","ingredients":"Milk, Salt, Culture",'
+                '"allergens":["en:milk","en:gluten"],"dietary":["en:vegetarian",'
+                '"en:vegan"],"categories":["en:snacks"],"countries":["en:australia"],'
+                '"nutrition":{"energy":"1200 kJ"}}',
+            ),
+        )
+        conn.commit()
+
+        report = build_merged(conn)
+        self.assertEqual(report["merged_rows"], 1)
+        row = conn.execute("SELECT * FROM merged_products").fetchone()
+        cols = [c[0] for c in conn.execute("SELECT * FROM merged_products LIMIT 0").description]
+        m = dict(zip(cols, row))
+
+        # Union of allergen claims: WW free claims + Coles contains + OFF tags.
+        allergens = (m["allergens"] or "").split(",")
+        self.assertIn("Contains Milk", allergens)
+        self.assertIn("Gluten Free", allergens)
+        self.assertIn("en:milk", allergens)
+        self.assertIn("en:gluten", allergens)
+        # Deduplicated: "en:vegetarian" should appear once.
+        self.assertEqual(allergens.count("en:vegetarian"), 0)  # vegetarian is dietary
+        dietary = (m["dietary"] or "").split(",")
+        self.assertEqual(dietary.count("Vegetarian"), 1)
+        # OFF tags are kept as-is (en:...); WW human labels as-is.
+        self.assertIn("en:vegan", dietary)
+        self.assertIn("en:vegan", dietary)
+
+        # Ingredients: WW has a value, so it wins over OFF.
+        self.assertEqual(m["ingredients"], "Milk, Salt")
+        # Prices stay per-store.
+        self.assertEqual(m["price_ww_cents"], 600)
+        self.assertEqual(m["price_coles_cents"], 750)
+        # OFF categories/countries unions.
+        self.assertIn("en:snacks", m["categories"])
+        self.assertIn("en:australia", m["countries"])
+
+    def test_image_priority_off_front(self):
+        conn = init_db(":memory:")
+        self._seed_pair(conn)
+        conn.execute(
+            "UPDATE products SET off_json=? WHERE store='Woolworths' AND product_id='1'",
+            (
+                '{"name":"Bega Stringers","image_url":"https://images.openfoodfacts.org/'
+                'front_en.1.400.jpg"}',
+            ),
+        )
+        conn.commit()
+        report = build_merged(conn)
+        self.assertEqual(report["merged_rows"], 1)
+        row = conn.execute("SELECT image_url, image_source FROM merged_products").fetchone()
+        # OFF front image (upgraded to full) wins over both store images.
+        self.assertEqual(
+            row[0], "https://images.openfoodfacts.org/front_en.1.full.jpg"
+        )
+        self.assertEqual(row[1], "OpenFoodFacts")
+
+    def test_image_priority_without_off(self):
+        conn = init_db(":memory:")
+        self._seed_pair(conn)
+        report = build_merged(conn)
+        self.assertEqual(report["merged_rows"], 1)
+        row = conn.execute("SELECT image_url, image_source FROM merged_products").fetchone()
+        self.assertEqual(row[1], "Woolworths")
+        self.assertEqual(row[0], "https://cdn0.woolworths.media/x.jpg")
+
+    def test_pick_image_white_check(self):
+        # Without OFF: WW large wins; with check_white and no Pillow it is kept.
+        url, src = pick_image(
+            "https://cdn0.woolworths.media/x.jpg",
+            "https://www.coles.com.au/8/123.jpg",
+            check_white=True,
+        )
+        self.assertEqual(src, "Woolworths")
 
 
 class TestColes(unittest.TestCase):

@@ -53,8 +53,9 @@ COLES_EXAMPLE_CATEGORIES = [
     "pantry",
 ]
 
-OFF_API = "https://world.openfoodfacts.org/api/v2/product/{barcode}.json"
-OFF_FIELDS = (
-    "code,product_name,brands,quantity,image_front_url,ingredients_text,"
+OFF_API_V3 = "https://world.openfoodfacts.org/api/v3/product/{barcode}.json"
+OFF_FIELDS_V3 = (
+    "code,product_name,brands,quantity,image_front_url,images,ingredients_text,"
     "allergens_tags,labels_tags,categories_tags,nutriments,countries_tags"
 )
+OFF_USER_AGENT = "aus-grocery-data/0.2 (course project)"

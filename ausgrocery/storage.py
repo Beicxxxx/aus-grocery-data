@@ -70,6 +70,35 @@ CREATE TABLE IF NOT EXISTS product_group_members (
 );
 CREATE INDEX IF NOT EXISTS idx_pgm_product
     ON product_group_members (store, product_id);
+
+CREATE TABLE IF NOT EXISTS merged_products (
+    barcode            TEXT PRIMARY KEY,
+    group_id           INTEGER,
+    name_ww            TEXT,
+    name_coles         TEXT,
+    brand              TEXT,
+    size_ww            TEXT,
+    size_coles         TEXT,
+    price_ww_cents     INTEGER,
+    price_coles_cents  INTEGER,
+    unit_price_ww      TEXT,
+    unit_price_coles   TEXT,
+    image_url          TEXT,
+    image_source       TEXT,
+    ingredients        TEXT,
+    allergens          TEXT,
+    allergen_statement TEXT,
+    allergen_claims    TEXT,
+    dietary            TEXT,
+    nutrition_json     TEXT,
+    storage            TEXT,
+    usage              TEXT,
+    origin             TEXT,
+    description        TEXT,
+    categories         TEXT,
+    countries          TEXT,
+    fetched_at         TEXT
+);
 """
 
 

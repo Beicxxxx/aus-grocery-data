@@ -9,12 +9,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from . import config
 from .coles import Coles
 from .http import HttpError
 from .matching import rebuild_groups
+from .merge import build_merged
 from .openfoodfacts import OpenFoodFacts, merge_fallback
 from .storage import init_db, log_crawl, now, upsert_product
 from .woolworths import Woolworths
@@ -272,34 +274,81 @@ def cmd_off(args) -> int:
 
 
 def cmd_backfill_off(args) -> int:
-    """Fill missing allergens/dietary/nutrition for rows with a barcode."""
+    """Fill missing allergens/dietary/nutrition for rows with a barcode.
+
+    With ``--cross-only`` only barcodes that appear in both stores (i.e. the
+    cross-store comparison groups) are queried, which keeps the API load
+    proportional to the previewed data instead of the whole catalogue.
+    """
     db = init_db(args.db)
-    off = OpenFoodFacts()
-    rows = db.execute(
-        "SELECT store, product_id, barcode FROM products "
-        "WHERE barcode IS NOT NULL AND barcode != '' "
-        "AND (ingredients IS NULL OR allergens IS NULL)"
-    ).fetchall()
+    if args.cross_only:
+        rows = db.execute(
+            """
+            SELECT p.store, p.product_id, p.barcode
+            FROM products p
+            JOIN product_group_members m ON m.store = p.store
+                AND m.product_id = p.product_id
+            JOIN product_groups g ON g.group_id = m.group_id
+            WHERE p.barcode IS NOT NULL AND p.barcode != ''
+              AND p.off_json IS NULL
+              AND g.group_id IN (
+                  SELECT group_id FROM product_group_members
+                  GROUP BY group_id HAVING COUNT(DISTINCT store) = 2
+              )
+            """
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT store, product_id, barcode FROM products "
+            "WHERE barcode IS NOT NULL AND barcode != '' "
+            "AND (ingredients IS NULL OR allergens IS NULL)"
+        ).fetchall()
     updated = 0
+    missed = 0
+    # Group rows by barcode so each barcode is queried once.
+    by_barcode: dict[str, list[tuple[str, str]]] = {}
     for store, pid, barcode in rows:
-        off_row = off.by_barcode(barcode)
+        by_barcode.setdefault(barcode, []).append((store, pid))
+
+    barcodes = list(by_barcode)
+    workers = max(1, min(8, args.threads))
+    off_results: dict[str, dict | None] = {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_map = {
+            pool.submit(OpenFoodFacts().by_barcode, b): b
+            for b in barcodes
+        }
+        done = 0
+        for future in as_completed(future_map):
+            b = future_map[future]
+            off_results[b] = future.result()
+            done += 1
+            if done % 100 == 0:
+                print(f"  {done}/{len(barcodes)} barcodes queried")
+
+    for barcode, targets in by_barcode.items():
+        off_row = off_results.get(barcode)
         if not off_row:
+            missed += 1
             continue
-        cur = db.execute(
-            "SELECT raw_json, off_json FROM products WHERE store=? AND product_id=?",
-            (store, pid),
-        ).fetchone()
-        primary = json.loads(cur[0]) if cur else {}
-        # Rebuild a normalized row so missing fields can be patched.
-        if store == "Woolworths":
-            row = Woolworths().normalize(primary)
-        else:
-            row = Coles().normalize(primary)
-        merge_fallback(row, off_row)
-        upsert_product(db, row, off_row=off_row)
-        updated += 1
-        print(f"  backfilled {store} {pid} ({barcode})")
-    print(f"done: {updated} products backfilled")
+        for store, pid in targets:
+            cur = db.execute(
+                "SELECT raw_json, off_json FROM products WHERE store=? AND product_id=?",
+                (store, pid),
+            ).fetchone()
+            primary = json.loads(cur[0]) if cur else {}
+            # Rebuild a normalized row so missing fields can be patched.
+            if store == "Woolworths":
+                row = Woolworths().normalize(primary)
+            else:
+                row = Coles().normalize(primary)
+            merge_fallback(row, off_row)
+            upsert_product(db, row, off_row=off_row)
+            updated += 1
+        if updated % 100 == 0:
+            print(f"  {updated} backfilled (missed {missed})")
+    print(f"done: {updated} products backfilled, "
+          f"{missed} barcodes not found on OFF")
     return 0
 
 
@@ -314,6 +363,18 @@ def cmd_match(args) -> int:
     print("== 示例 ==")
     for ex in report["examples"]:
         print(f"  [{ex['method']}] {ex['ww']}  <->  {ex['coles']}")
+    return 0
+
+
+def cmd_merge(args) -> int:
+    db = init_db(args.db)
+    report = build_merged(db, check_white=args.check_white,
+                          verify_images=args.verify_images)
+    print("== 三源合并表 ==")
+    print(f"合并行数: {report['merged_rows']}")
+    print(f"含 Woolworths: {report['with_ww']}")
+    print(f"含 Coles: {report['with_coles']}")
+    print(f"含 Open Food Facts: {report['with_off']}")
     return 0
 
 
@@ -357,11 +418,25 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_off)
 
     sp = sub.add_parser("backfill-off", parents=[common], help="backfill missing fields via barcode")
+    sp.add_argument("--cross-only", action="store_true",
+                    help="only backfill barcodes in cross-store groups")
+    sp.add_argument("--threads", type=int, default=4,
+                    help="parallel OFF lookups (default 4)")
     sp.set_defaults(func=cmd_backfill_off)
 
     sp = sub.add_parser("match", parents=[common],
                         help="rebuild cross-store product groups (GTIN only)")
     sp.set_defaults(func=cmd_match)
+
+    sp = sub.add_parser("merge", parents=[common],
+                        help="build merged product details (WW + Coles + OFF union)")
+    sp.add_argument("--check-white", action="store_true",
+                    help="verify the chosen image has a white background "
+                         "(downloads images; requires Pillow)")
+    sp.add_argument("--verify-images", action="store_true",
+                    help="verify the chosen image URL actually returns an image, "
+                         "falling back to the next candidate")
+    sp.set_defaults(func=cmd_merge)
 
     sp = sub.add_parser("food-all", parents=[common],
                         help="crawl all food & drink departments at both stores")

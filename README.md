@@ -25,9 +25,13 @@ origin.
 - Open Food Facts: barcode lookup used only to fill missing allergens /
   dietary tags / nutrition (source is recorded separately).
 - SQLite storage: `products` (current snapshot), `price_history`
-  (daily price points), `crawl_log`, `product_groups` (cross-store groups).
+  (daily price points), `crawl_log`, `product_groups` (cross-store groups),
+  `merged_products` (three-source union details).
 - Cross-store matching: strict GTIN barcode matching only (no fuzzy name
   matching, zero mis-pairing), so the app can render both stores side by side.
+- Merged details: one row per product = union of Woolworths + Coles +
+  Open Food Facts fields; single best image (OFF front view full-res first,
+  then WW large, then Coles CDN); preview reads the merged table directly.
 - Polite crawling: request delay, retries with backoff, persistent cookie
   jar, bot-challenge detection ("Pardon Our Interruption", Incapsula).
 - Real-browser fallback: automatic Playwright + Chrome kept as a last resort
@@ -56,6 +60,12 @@ python -m ausgrocery match --db data/grocery.db
 
 # Full food & drink crawl (both stores + auto match)
 python -m ausgrocery food-all --db data/grocery.db
+
+# Build the three-source merged details table
+python -m ausgrocery merge --db data/grocery.db
+
+# Generate the merged preview
+python scripts/preview.py --db data/grocery.db --out data/preview.html
 
 # Open Food Facts fallback by barcode
 python -m ausgrocery off --barcode 9300633556150
