@@ -30,8 +30,8 @@ origin.
 - Cross-store matching: strict GTIN barcode matching only (no fuzzy name
   matching, zero mis-pairing), so the app can render both stores side by side.
 - Merged details: one row per product = union of Woolworths + Coles +
-  Open Food Facts fields; single best image (OFF front view full-res first,
-  then WW large, then Coles CDN); preview reads the merged table directly.
+  Open Food Facts fields; single best image (WW large first, then Coles CDN,
+  then OFF front view as last resort); preview reads the merged table.
 - Polite crawling: request delay, retries with backoff, persistent cookie
   jar, bot-challenge detection ("Pardon Our Interruption", Incapsula).
 - Real-browser fallback: automatic Playwright + Chrome kept as a last resort

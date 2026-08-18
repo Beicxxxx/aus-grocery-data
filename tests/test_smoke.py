@@ -322,7 +322,7 @@ class TestMerge(unittest.TestCase):
         self.assertIn("en:snacks", m["categories"])
         self.assertIn("en:australia", m["countries"])
 
-    def test_image_priority_off_front(self):
+    def test_image_priority_ww_first_even_with_off(self):
         conn = init_db(":memory:")
         self._seed_pair(conn)
         conn.execute(
@@ -336,10 +336,51 @@ class TestMerge(unittest.TestCase):
         report = build_merged(conn)
         self.assertEqual(report["merged_rows"], 1)
         row = conn.execute("SELECT image_url, image_source FROM merged_products").fetchone()
-        # OFF front image (upgraded to full) wins over both store images.
-        self.assertEqual(
-            row[0], "https://images.openfoodfacts.org/front_en.1.full.jpg"
+        # WW large wins over OFF front view.
+        self.assertEqual(row[0], "https://cdn0.woolworths.media/x.jpg")
+        self.assertEqual(row[1], "Woolworths")
+
+    def test_image_priority_coles_over_off_when_no_ww(self):
+        conn = init_db(":memory:")
+        self._seed_pair(conn)
+        conn.execute(
+            "UPDATE products SET image_url=NULL WHERE store='Woolworths' AND product_id='1'"
         )
+        conn.execute(
+            "UPDATE products SET off_json=? WHERE store='Woolworths' AND product_id='1'",
+            (
+                '{"name":"Bega Stringers","image_url":"https://images.openfoodfacts.org/'
+                'front_en.1.400.jpg"}',
+            ),
+        )
+        conn.commit()
+        report = build_merged(conn)
+        self.assertEqual(report["merged_rows"], 1)
+        row = conn.execute("SELECT image_url, image_source FROM merged_products").fetchone()
+        self.assertEqual(row[0], "https://www.coles.com.au/8/123.jpg")
+        self.assertEqual(row[1], "Coles")
+
+    def test_off_image_as_last_resort(self):
+        conn = init_db(":memory:")
+        self._seed_pair(conn)
+        conn.execute(
+            "UPDATE products SET image_url=NULL WHERE store='Woolworths' AND product_id='1'"
+        )
+        conn.execute(
+            "UPDATE products SET image_url=NULL WHERE store='Coles' AND product_id='2'"
+        )
+        conn.execute(
+            "UPDATE products SET off_json=? WHERE store='Woolworths' AND product_id='1'",
+            (
+                '{"name":"Bega Stringers","image_url":"https://images.openfoodfacts.org/'
+                'front_en.1.400.jpg"}',
+            ),
+        )
+        conn.commit()
+        report = build_merged(conn)
+        self.assertEqual(report["merged_rows"], 1)
+        row = conn.execute("SELECT image_url, image_source FROM merged_products").fetchone()
+        self.assertEqual(row[0], "https://images.openfoodfacts.org/front_en.1.full.jpg")
         self.assertEqual(row[1], "OpenFoodFacts")
 
     def test_image_priority_without_off(self):

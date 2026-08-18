@@ -8,10 +8,10 @@ dietary tags, categories) are deduplicated unions.
 
 Image selection: the best single image wins, in this order:
 
-1. Open Food Facts front view (explicit front-of-pack photo) - upgraded to
-   the full-resolution variant;
-2. Woolworths ``large`` product image;
-3. Coles product image (CDN).
+1. Woolworths ``large`` product image;
+2. Coles product image (CDN);
+3. Open Food Facts front view (explicit front-of-pack photo) - upgraded to
+   the full-resolution variant (last resort only).
 
 An optional ``--check-white`` pass verifies the chosen image actually has a
 white/near-white background by sampling the corners (requires Pillow).
@@ -81,17 +81,17 @@ def pick_image(
 ) -> tuple[str | None, str | None]:
     """Choose the best single product image.
 
-    Priority: OFF front view (full res) > Woolworths large > Coles CDN.
+    Priority: Woolworths large > Coles CDN > OFF front view (full res).
     ``check_white`` validates the winner's corners are near-white (Pillow).
     """
     candidates: list[tuple[int, str, str]] = []
     off_url, off_src = _off_image(off)
-    if off_url:
-        candidates.append((0, off_url, "OpenFoodFacts"))
     if ww_url:
-        candidates.append((1, ww_url, "Woolworths"))
+        candidates.append((0, ww_url, "Woolworths"))
     if co_url:
-        candidates.append((2, co_url, "Coles"))
+        candidates.append((1, co_url, "Coles"))
+    if off_url:
+        candidates.append((2, off_url, "OpenFoodFacts"))
     candidates.sort(key=lambda c: c[0])
     if not candidates:
         return None, None

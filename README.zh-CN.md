@@ -23,7 +23,7 @@ Open Food Facts 补齐缺失字段。输出字段对应商品详情页的常见�
 - **跨店匹配**：严格按 GTIN 条形码匹配（不做名称模糊匹配，零误配），
   生成商品组，供前端并排展示双店价格与成分。
 - **三源合并**：商品详情 = WW + Coles + Open Food Facts 字段并集；
-  图片多选一（OFF 正视图高清优先 → WW → Coles），
+  图片多选一（WW 大图优先 → Coles → OFF 正视图兜底），
   预览脚本直接消费合并表。
 - **礼貌抓取**：请求间隔、指数退避重试、持久化 cookie、
   反爬拦截检测（"Pardon Our Interruption" / Incapsula）。

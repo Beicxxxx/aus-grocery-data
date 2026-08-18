@@ -20,13 +20,17 @@
 
 ## 图片选择（多选一）
 
-1. **Open Food Facts 正视图**（`front_*`，升级为 `full` 高清版）优先；
-2. 其次 **Woolworths `large` 商品图**；
-3. 最后 **Coles CDN 商品图**。
+1. **Woolworths `large` 商品图**优先；
+2. 其次 **Coles CDN 商品图**；
+3. 最后 **Open Food Facts 正视图**（`front_*`，升级为 `full` 高清版，
+   仅当双店都无图时兜底）。
 
 `--verify-images` 会逐个验证 OFF 图片 URL 是否真的返回图片
 （下载前 16 字节检查 magic），失败则回退下一候选。
 `--check-white` 用 Pillow 检查图片四角是否接近白色，非白底时回退。
+
+当前全量（5,459 行）：**5,459 行使用 Woolworths 大图**（WW 图片覆盖率
+100%），Coles / OFF 图片作为缺图时的兜底来源。
 
 ## 生成
 
@@ -55,6 +59,6 @@ Open Food Facts 的**读取**接口不需要 API key 或账号，只需要：
 ### 当前 OFF 覆盖情况
 
 - 试点阶段已对 120 个商品做了 OFF 回填（存于 `products.off_json`）；
-- 合并表中 60 行含 OFF 数据，其中 54 行采用 OFF 正视图作为主图；
+- 合并表中 60 行含 OFF 数据（字段并集仍生效），但主图一律以超市图为先；
 - 全量 5,459 组的 OFF 回填受速率限制（15/min），建议按官方
   JSONL 导出一次性加载，或分批回填（约 6 小时可跑完）。
