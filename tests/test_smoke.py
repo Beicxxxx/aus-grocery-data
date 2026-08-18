@@ -1,5 +1,6 @@
 """No-network smoke tests for normalization and storage."""
 
+import json
 import sqlite3
 import sys
 import unittest
@@ -77,13 +78,23 @@ class TestWoolworths(unittest.TestCase):
         self.assertEqual(row["price"], 2.75)
         self.assertEqual(row["allergen_claims"], ["Dairy Free", "Egg Free"])
         self.assertEqual(row["dietary"], ["Kosher", "Vegan"])
-        self.assertEqual(row["nutrition"]["Energy kJ"], {"100g": "4.0kJ", "Serve": "10.0kJ"})
+        self.assertEqual(
+            row["nutrition"]["nutrients"]["Energy kJ"],
+            {"100g": "4.0kJ", "Serve": "10.0kJ"},
+        )
 
     def test_nutrition_parser(self):
         rows = parse_ww_nutrition('{"Attributes": ['
             '{"Name": "Sodium Quantity Per 100g - Total - NIP", "Value": "7.0mg"},'
-            '{"Name": "Sodium Quantity Per Serve - Total - NIP", "Value": "18.0mg"}]}')
-        self.assertEqual(rows, {"Sodium": {"100g": "7.0mg", "Serve": "18.0mg"}})
+            '{"Name": "Sodium Quantity Per Serve - Total - NIP", "Value": "18.0mg"},'
+            '{"Name": "Serving Size - Total - NIP", "Value": "20.0 G"},'
+            '{"Name": "Servings Per Pack - Total - NIP", "Value": "25.0"}]}')
+        self.assertEqual(
+            rows["nutrients"],
+            {"Sodium": {"100g": "7.0mg", "Serve": "18.0mg"}},
+        )
+        self.assertEqual(rows["serving_size"], "20.0 G")
+        self.assertEqual(rows["servings_per_package"], "25.0")
         self.assertIsNone(parse_ww_nutrition(None))
 
 
@@ -400,6 +411,46 @@ class TestMerge(unittest.TestCase):
             check_white=True,
         )
         self.assertEqual(src, "Woolworths")
+
+    def test_off_nutrition_normalized_no_leak(self):
+        """OFF flat nutriments must not leak _100g/_serving/_unit keys."""
+        conn = init_db(":memory:")
+        self._seed_pair(conn)
+        conn.execute(
+            "UPDATE products SET off_json=? WHERE store='Woolworths' AND product_id='1'",
+            (
+                '{"name":"Bega Stringers","nutrition":{'
+                '"monounsaturated-fat":3,"monounsaturated-fat_100g":3,'
+                '"monounsaturated-fat_serving":0.3,"monounsaturated-fat_unit":"g",'
+                '"monounsaturated-fat_value":3,'
+                '"energy-kj":240.5,"energy-kj_100g":240.5,'
+                '"energy-kj_serving":24,"energy-kj_unit":"kJ",'
+                '"caffeine":0,"caffeine_100g":0,"caffeine_unit":"g"},'
+                '"serving_size":"1 tbsp (20 g)"}',
+            ),
+        )
+        conn.commit()
+        report = build_merged(conn)
+        self.assertEqual(report["merged_rows"], 1)
+        row = conn.execute(
+            "SELECT nutrition_json FROM merged_products"
+        ).fetchone()
+        nut = json.loads(row[0])
+        off = nut["sources"]["OpenFoodFacts"]
+        keys = " ".join(off.get("nutrients", {}).keys())
+        self.assertNotIn("_100g", keys)
+        self.assertNotIn("_serving", keys)
+        self.assertNotIn("_unit", keys)
+        self.assertNotIn("Caffeine", keys)  # zero-noise row dropped
+        self.assertEqual(
+            off["nutrients"].get("Monounsaturated Fat", {}).get("per_100g"),
+            "3 g",
+        )
+        self.assertEqual(
+            off["nutrients"].get("Energy Kj", {}).get("per_serve"),
+            "24 kJ",
+        )
+        self.assertEqual(off["serving_size"], "1 tbsp (20 g)")
 
 
 class TestColes(unittest.TestCase):

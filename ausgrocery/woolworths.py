@@ -180,12 +180,24 @@ def parse_ww_nutrition(raw: str | None) -> dict | None:
     except json.JSONDecodeError:
         return None
     rows = {}
+    serving_size = None
+    servings_per_package = None
     for attr in data.get("Attributes") or []:
         name = attr.get("Name") or ""
         m = re.match(r"^(.*?) Quantity Per (100g|Serve)(?: - Total)? - NIP$", name)
         if m:
             rows.setdefault(m.group(1), {})[m.group(2)] = attr.get("Value")
-    return rows or None
+        elif "Serving Size" in name and "- NIP" in name:
+            serving_size = attr.get("Value")
+        elif "Servings Per Pack" in name and "- NIP" in name:
+            servings_per_package = attr.get("Value")
+    if not rows and not serving_size:
+        return None
+    return {
+        "serving_size": serving_size,
+        "servings_per_package": servings_per_package,
+        "nutrients": rows or None,
+    }
 
 
 def _comma_list(value) -> list[str] | None:

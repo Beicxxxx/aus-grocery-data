@@ -47,16 +47,36 @@ def canonical_nutrient(name: str) -> str:
     n = " ".join(n.split())
     for prefix, label in (
         ("energy kj", "Energy (kJ)"),
-        ("energy cal", "Energy (Cal)"),
+        ("energy kcal", "Energy (Cal)"),
         ("energy", "Energy (kJ)"),
+        ("proteins", "Protein"),
         ("protein", "Protein"),
         ("fat saturated", "Fat (Saturated)"),
+        ("saturated fat", "Fat (Saturated)"),
+        ("fat monounsaturated", "Fat (Monounsaturated)"),
+        ("monounsaturated fat", "Fat (Monounsaturated)"),
+        ("monounsaturated", "Fat (Monounsaturated)"),
+        ("fat polyunsaturated", "Fat (Polyunsaturated)"),
+        ("polyunsaturated fat", "Fat (Polyunsaturated)"),
+        ("polyunsaturated", "Fat (Polyunsaturated)"),
+        ("fat trans", "Fat (Trans)"),
+        ("trans fat", "Fat (Trans)"),
+        ("trans", "Fat (Trans)"),
         ("fat total", "Fat (Total)"),
-        ("fat", "Fat"),
+        ("fat", "Fat (Total)"),
+        ("carbohydrates", "Carbohydrate"),
         ("carbohydrate", "Carbohydrate"),
         ("sugars total", "Sugars"),
+        ("added sugars", "Sugars"),
+        ("sugars", "Sugars"),
         ("sugar", "Sugars"),
+        ("dietary fibre", "Dietary Fibre"),
+        ("dietary fiber", "Dietary Fibre"),
+        ("fibre", "Dietary Fibre"),
+        ("fiber", "Dietary Fibre"),
         ("sodium", "Sodium"),
+        ("salt", "Salt"),
+        ("cholesterol", "Cholesterol"),
         ("calcium", "Calcium"),
     ):
         if n.startswith(prefix):
@@ -65,40 +85,72 @@ def canonical_nutrient(name: str) -> str:
 
 
 def parse_merged_nutrition(value) -> dict:
-    """Parse the merged nutrition_json ({"sources": {store: table}}).
+    """Parse the merged nutrition_json into a display structure.
 
-    Returns {canonical_label: {"100g": str, "serve": str}} where the value is
-    the first non-empty across Woolworths / Coles / Open Food Facts.
+    Returns ``{"serving_size", "servings_per_package", "nutrients"}`` where
+    nutrients maps canonical labels to ``{"100g": str, "serve": str}`` and
+    the value is the first non-empty across the three sources.
     """
     if not value:
-        return {}
+        return {"serving_size": None, "servings_per_package": None, "nutrients": {}}
     try:
         data = json.loads(value)
     except ValueError:
-        return {}
+        return {"serving_size": None, "servings_per_package": None, "nutrients": {}}
     sources = data.get("sources") or {}
     merged: dict = {}
+    serving_sizes = []
+    package_counts = []
     for label, table in sources.items():
-        nutrients = {}
-        if isinstance(table, dict) and "nutrients" in table:
-            nutrients = table.get("nutrients") or {}
-        elif isinstance(table, dict):
-            nutrients = table  # OFF nutriments are flat
+        if not isinstance(table, dict):
+            continue
+        if table.get("serving_size"):
+            serving_sizes.append((label, table["serving_size"]))
+        if table.get("servings_per_package"):
+            package_counts.append((label, table["servings_per_package"]))
+        if isinstance(table.get("nutrients"), dict):
+            nutrients = table["nutrients"]
+        else:
+            # Legacy flat shape: {name: {"100g":..., "Serve":...}} or raw OFF.
+            nutrients = {k: v for k, v in table.items() if isinstance(v, dict)}
         for name, v in nutrients.items():
             key = canonical_nutrient(name)
             merged.setdefault(key, {})
             if isinstance(v, dict):
-                merged[key].setdefault("100g", v.get("per_100g") or v.get("100g"))
-                merged[key].setdefault("serve", v.get("per_serve") or v.get("Serve"))
-            elif label == "OpenFoodFacts":
-                merged[key].setdefault("100g", v)
-    return {k: v for k, v in merged.items() if v.get("100g") or v.get("serve")}
+                v100 = v.get("per_100g") or v.get("100g")
+                vserve = v.get("per_serve") or v.get("Serve")
+                if v100:
+                    merged[key].setdefault("100g", v100)
+                if vserve:
+                    merged[key].setdefault("serve", vserve)
+    # Prefer Coles serving size (explicit), then WW, then OFF.
+    serving_size = None
+    for label in ("Coles", "Woolworths", "OpenFoodFacts"):
+        for lbl, val in serving_sizes:
+            if lbl == label:
+                serving_size = val
+                break
+        if serving_size:
+            break
+    servings_per_package = next(
+        (val for lbl, val in package_counts), None
+    )
+    nutrients = {
+        k: v for k, v in merged.items() if v.get("100g") or v.get("serve")
+    }
+    return {
+        "serving_size": serving_size,
+        "servings_per_package": servings_per_package,
+        "nutrients": nutrients,
+    }
 
 
 def nutrition_rows(nutrition: dict) -> list[dict]:
     order = [
         "Energy (kJ)", "Energy (Cal)", "Protein", "Fat (Total)",
-        "Fat (Saturated)", "Carbohydrate", "Sugars", "Sodium", "Calcium",
+        "Fat (Saturated)", "Fat (Monounsaturated)", "Fat (Polyunsaturated)",
+        "Fat (Trans)", "Carbohydrate", "Sugars", "Dietary Fibre",
+        "Cholesterol", "Sodium", "Salt", "Calcium",
     ]
     labels = sorted(
         nutrition,
@@ -121,7 +173,12 @@ def card(m: dict) -> str:
     ww_cheap, co_cheap = price_highlight(m.get("price_ww_cents"),
                                           m.get("price_coles_cents"))
     nut = parse_merged_nutrition(m.get("nutrition_json"))
-    nut_rows = nutrition_rows(nut)
+    nut_rows = nutrition_rows(nut["nutrients"])
+    serving_note = ""
+    if nut.get("serving_size"):
+        serving_note = f" · 每份 {esc(nut['serving_size'])}"
+    if nut.get("servings_per_package"):
+        serving_note += f" · 每包 {esc(nut['servings_per_package'])} 份"
     dietary = split_list(m.get("dietary"))
     allergens = split_list(m.get("allergen_claims")) or split_list(m.get("allergens"))
     tags = "".join(f'<span class="tag">{esc(t)}</span>' for t in dietary[:10])
@@ -168,7 +225,7 @@ def card(m: dict) -> str:
         )
         nut_html = f"""
         <details class="nutrition" open>
-          <summary>营养信息（合并三家来源 · 每 100g / 每份）</summary>
+          <summary>营养信息（每 100g / 每份{serving_note}）</summary>
           <table>
             <thead><tr><th>营养</th><th>每 100g</th><th>每份</th></tr></thead>
             <tbody>{rows}</tbody>

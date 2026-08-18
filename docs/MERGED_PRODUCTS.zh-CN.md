@@ -14,7 +14,12 @@
 | 配料 | 三源第一个非空（WW 优先 → Coles → OFF） |
 | 过敏声明 | 三源列表去重并集 |
 | 膳食标签 | 三源列表去重并集 |
-| 营养表 | 三源各自保留（`nutrition_json.sources`），预览时按营养项取并集 |
+| 营养表 | 三源各自保留（`nutrition_json.sources`），预览时按营养项取并集；
+  OFF 的扁平字段（`monounsaturated-fat_100g` 等）归一化为
+  `每 100g / 每份` 结构，零值/噪音条目自动过滤；同义营养名
+  （如 "Fat" 与 "Fat - Total"）合并为同一行 |
+| 每份大小 | WW 来自 NIP "Serving Size"（如 20.0 G）、Coles 来自
+  `servingSize`、OFF 来自 `serving_size`；预览优先取 Coles → WW → OFF |
 | 储存/用法/原产地 | 三源第一个非空 |
 | 分类/国家 | OFF + 超市列表去重并集 |
 

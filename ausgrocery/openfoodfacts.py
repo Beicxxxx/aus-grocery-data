@@ -79,6 +79,10 @@ class OpenFoodFacts:
             "name": p.get("product_name"),
             "brand": p.get("brands"),
             "size": p.get("quantity"),
+            "serving_size": p.get("serving_size"),
+            "servings_per_package": (p.get("nutriments") or {}).get(
+                "servings_per_package"
+            ),
             "image_url": image_url,
             "barcode": p.get("code"),
             "ingredients": p.get("ingredients_text"),

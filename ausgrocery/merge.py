@@ -162,6 +162,96 @@ def _is_white_background(url: str, threshold: int = 235) -> bool | None:
         return None
 
 
+_OFF_NOISE_NAMES = {
+    "nova-group", "additives", "food-additives", "fruits-vegetables-nuts",
+    "fruits-vegetables-nuts-estimate-from-ingredients",
+    "nutrition-score-fr", "carbon-footprint", "glycemic-index",
+}
+
+
+def _fmt_off_value(value, unit: str | None) -> str | None:
+    if value is None or value == "":
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    text = f"{num:.4g}" if num else "0"
+    return f"{text} {unit}" if unit else text
+
+
+def _normalize_off_nutrition(off: dict | None) -> dict | None:
+    """Turn OFF's flat nutriments (``monounsaturated-fat_100g`` etc.) into a
+    clean ``{serving_size, servings_per_package, nutrients}`` structure."""
+    if not off:
+        return None
+    flat = off.get("nutrition") or {}
+    if not isinstance(flat, dict):
+        return None
+    if "nutrients" in flat:
+        return flat  # already structured
+    raw = off.get("raw") or {}
+    serving_size = (
+        off.get("serving_size")
+        or raw.get("serving_size")
+        or flat.get("serving_size")
+    )
+    servings_per_package = (
+        off.get("servings_per_package")
+        or raw.get("servings_per_package")
+        or flat.get("servings_per_package")
+    )
+
+    groups: dict[str, dict] = {}
+    for key, value in flat.items():
+        if key in ("serving_size", "serving_quantity", "servings_per_package"):
+            continue
+        base, sep, suffix = key.rpartition("_")
+        if not sep or suffix not in ("100g", "serving", "unit", "value", "label"):
+            base, suffix = key, ""
+        entry = groups.setdefault(base, {})
+        if suffix == "100g":
+            entry["per_100g"] = value
+        elif suffix == "serving":
+            entry["per_serve"] = value
+        elif suffix == "unit":
+            entry["unit"] = str(value)
+        elif suffix == "value" and "per_100g" not in entry:
+            entry["per_100g"] = value
+        elif suffix == "label":
+            entry["label"] = str(value)
+
+    nutrients: dict[str, dict] = {}
+    for base, entry in groups.items():
+        if base in _OFF_NOISE_NAMES or any(
+            token in base for token in ("estimate", "score", "footprint")
+        ):
+            continue
+        unit = entry.get("unit")
+        v100 = _fmt_off_value(entry.get("per_100g"), unit)
+        vserve = _fmt_off_value(entry.get("per_serve"), unit)
+        if v100 is None and vserve is None:
+            continue
+        if (v100 in ("0", "0 g") or v100 is None) and (vserve in ("0", "0 g") or vserve is None):
+            continue  # OFF defaults missing nutrients to 0; skip noise rows
+        label = entry.get("label") or _pretty_off_name(base)
+        nutrients[label] = {
+            k: v for k, v in (("per_100g", v100), ("per_serve", vserve)) if v
+        }
+    if not nutrients:
+        return None
+    return {
+        "serving_size": serving_size,
+        "servings_per_package": servings_per_package,
+        "nutrients": nutrients,
+    }
+
+
+def _pretty_off_name(base: str) -> str:
+    words = base.replace("_", " ").replace("-", " ").split()
+    return " ".join(w.capitalize() for w in words)
+
+
 def _nutrition_union(ww_row: dict, co_row: dict, off: dict | None) -> str | None:
     """Merge the nutrition tables from every source into one JSON payload."""
     merged: dict = {"sources": {}}
@@ -172,8 +262,9 @@ def _nutrition_union(ww_row: dict, co_row: dict, off: dict | None) -> str | None
                 merged["sources"][label] = json.loads(raw)
             except (TypeError, ValueError):
                 pass
-    if off and off.get("nutrition"):
-        merged["sources"]["OpenFoodFacts"] = off["nutrition"]
+    off_nut = _normalize_off_nutrition(off)
+    if off_nut:
+        merged["sources"]["OpenFoodFacts"] = off_nut
     if not merged["sources"]:
         return None
     return json.dumps(merged, ensure_ascii=False)
